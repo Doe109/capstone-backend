@@ -17,6 +17,17 @@ import { sendRoadAdvisoryNotification } from '../services/pushNotificationServic
 
 const router = Router();
 
+function formatMysqlDateTime(dateStr?: string): string {
+  if (!dateStr) return new Date().toISOString().slice(0, 19).replace('T', ' ');
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return new Date().toISOString().slice(0, 19).replace('T', ' ');
+    return d.toISOString().slice(0, 19).replace('T', ' ');
+  } catch {
+    return new Date().toISOString().slice(0, 19).replace('T', ' ');
+  }
+}
+
 // ── POST /api/reports ───────────────────────────────────────────────
 
 router.post(
@@ -63,7 +74,7 @@ router.post(
         conditionType,
         description: finalDescription,
         photoUri,
-        photoCapturedAt: photoCapturedAt || now,
+        photoCapturedAt: formatMysqlDateTime(photoCapturedAt),
         capturedLatitude: parseFloat(capturedLatitude) || 0,
         capturedLongitude: parseFloat(capturedLongitude) || 0,
         locationAccuracyMeters: parseFloat(locationAccuracyMeters) || 0,
@@ -77,9 +88,9 @@ router.post(
       });
 
       res.status(201).json({ success: true, report });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Create report error:', error);
-      res.status(500).json({ success: false, error: 'Internal server error.' });
+      res.status(500).json({ success: false, error: error?.message || 'Internal server error.' });
     }
   },
 );
