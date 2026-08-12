@@ -8,7 +8,14 @@ import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { getPool } from '../database/connection';
 import { RoadReport, ReportStatus, VoteType } from '../types/report';
 
-// ── Row → Domain ────────────────────────────────────────────────────
+function formatIsoTimestamp(val: any): string {
+  if (!val) return val;
+  if (val instanceof Date) return val.toISOString();
+  const str = String(val).trim();
+  if (str.endsWith('Z')) return str;
+  const isoStr = str.replace(' ', 'T');
+  return isoStr.endsWith('Z') ? isoStr : `${isoStr}Z`;
+}
 
 function rowToReport(row: RowDataPacket): RoadReport {
   const agreeCount = Number(row.communityAgreeCount ?? 0);
@@ -21,16 +28,16 @@ function rowToReport(row: RowDataPacket): RoadReport {
     conditionType: row.conditionType,
     description: row.description,
     photoUri: row.photoUri,
-    photoCapturedAt: row.photoCapturedAt,
+    photoCapturedAt: formatIsoTimestamp(row.photoCapturedAt),
     capturedLatitude: Number(row.capturedLatitude),
     capturedLongitude: Number(row.capturedLongitude),
     locationAccuracyMeters: Number(row.locationAccuracyMeters),
     reportLatitude: Number(row.reportLatitude),
     reportLongitude: Number(row.reportLongitude),
     selectedBarangay: row.selectedBarangay,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    submittedAt: row.submittedAt,
+    createdAt: formatIsoTimestamp(row.createdAt),
+    updatedAt: formatIsoTimestamp(row.updatedAt),
+    submittedAt: formatIsoTimestamp(row.submittedAt),
     reportStatus: row.reportStatus,
     syncStatus: row.syncStatus,
     locationEvidenceStatus: row.locationEvidenceStatus,
@@ -43,7 +50,7 @@ function rowToReport(row: RowDataPacket): RoadReport {
     locationValidationScore: Number(row.locationValidationScore ?? 0),
     reportReliabilityScore: Number(row.reportReliabilityScore ?? 0),
     advisoryText: row.advisoryText ?? null,
-    resolvedAt: row.resolvedAt ?? null,
+    resolvedAt: row.resolvedAt ? formatIsoTimestamp(row.resolvedAt) : null,
   };
 }
 
