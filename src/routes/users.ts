@@ -6,11 +6,13 @@
  */
 
 import { Router, Request, Response } from 'express';
+import bcrypt from 'bcrypt';
 import * as usersRepository from '../repositories/usersRepository';
 import { authenticate } from '../middleware/auth';
 import { upload } from '../middleware/upload';
 
 const router = Router();
+const SALT_ROUNDS = 12;
 
 // ── GET /api/users/me ───────────────────────────────────────────────
 
@@ -32,12 +34,21 @@ router.get('/me', authenticate, async (req: Request, res: Response): Promise<voi
 
 router.patch('/me', authenticate, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { fullName, firstName, lastName, phone, address, profilePhotoUri } = req.body;
+    const { fullName, firstName, lastName, email, phone, address, profilePhotoUri } = req.body;
+
+    if (email) {
+      const existing = await usersRepository.findUserByEmail(email);
+      if (existing && existing.id !== req.user!.userId) {
+        res.status(409).json({ success: false, error: 'Email address is already in use.' });
+        return;
+      }
+    }
 
     const user = await usersRepository.updateUser(req.user!.userId, {
       fullName,
       firstName,
       lastName,
+      email,
       phone,
       address,
       profilePhotoUri,
@@ -100,6 +111,58 @@ router.post('/me/push-token', authenticate, async (req: Request, res: Response):
     res.json({ success: true, message: 'Push token updated successfully.' });
   } catch (error) {
     console.error('Update push token error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error.' });
+  }
+});
+
+// ── PATCH /api/users/me/password ────────────────────────────────────
+
+router.patch('/me/password', authenticate, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      res.status(400).json({
+        success: false,
+        error: 'Current password and new password are required.',
+      });
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      res.status(400).json({
+        success: false,
+        error: 'New password must be at least 6 characters.',
+      });
+      return;
+    }
+
+    if (confirmPassword && newPassword !== confirmPassword) {
+      res.status(400).json({
+        success: false,
+        error: 'New password and confirm password do not match.',
+      });
+      return;
+    }
+
+    const userRow = await usersRepository.findUserRowById(req.user!.userId);
+    if (!userRow) {
+      res.status(404).json({ success: false, error: 'User not found.' });
+      return;
+    }
+
+    const match = await bcrypt.compare(currentPassword, userRow.passwordHash);
+    if (!match) {
+      res.status(400).json({ success: false, error: 'Incorrect current password. Please try again.' });
+      return;
+    }
+
+    const newHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    await usersRepository.updatePassword(req.user!.userId, newHash);
+
+    res.json({ success: true, message: 'Password updated successfully.' });
+  } catch (error) {
+    console.error('Change password error:', error);
     res.status(500).json({ success: false, error: 'Internal server error.' });
   }
 });

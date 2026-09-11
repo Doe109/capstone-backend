@@ -201,3 +201,16 @@ export async function updateReportScores(
 
   return findReportById(reportId);
 }
+
+/**
+ * Mark a road condition report as Resolved and set resolvedAt timestamp.
+ */
+export async function resolveReport(reportId: string): Promise<RoadReport | null> {
+  const pool = getPool();
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  await pool.query<ResultSetHeader>(
+    `UPDATE reports SET reportStatus = 'Resolved', resolvedAt = ?, updatedAt = ? WHERE id = ?`,
+    [now, now, reportId],
+  );
+  return findReportById(reportId);
+}

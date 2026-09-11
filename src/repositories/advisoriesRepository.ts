@@ -59,3 +59,19 @@ export async function create(advisory: {
     active: true,
   };
 }
+
+export async function deactivateByBarangay(selectedBarangay: string): Promise<void> {
+  const pool = getPool();
+  await pool.query<ResultSetHeader>(
+    'UPDATE advisories SET active = 0 WHERE selectedBarangay = ?',
+    [selectedBarangay],
+  );
+}
+
+export async function deactivateById(id: string): Promise<void> {
+  const pool = getPool();
+  await pool.query<ResultSetHeader>(
+    'UPDATE advisories SET active = 0 WHERE id = ?',
+    [id],
+  );
+}

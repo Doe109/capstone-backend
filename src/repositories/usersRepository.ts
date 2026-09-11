@@ -70,9 +70,18 @@ export async function findUserById(id: string): Promise<User | null> {
   return rows.length > 0 ? rowToUser(rows[0]) : null;
 }
 
+export async function findUserRowById(id: string): Promise<UserRow | null> {
+  const pool = getPool();
+  const [rows] = await pool.query<RowDataPacket[]>(
+    'SELECT * FROM users WHERE id = ?',
+    [id],
+  );
+  return rows.length > 0 ? rowToUserRow(rows[0]) : null;
+}
+
 export async function updateUser(
   id: string,
-  updates: Partial<Pick<User, 'fullName' | 'firstName' | 'lastName' | 'phone' | 'address' | 'profilePhotoUri' | 'pushToken'>>,
+  updates: Partial<Pick<User, 'fullName' | 'firstName' | 'lastName' | 'email' | 'phone' | 'address' | 'profilePhotoUri' | 'pushToken'>>,
 ): Promise<User | null> {
   const entries = Object.entries(updates).filter(([, v]) => v !== undefined);
   if (entries.length === 0) return findUserById(id);
@@ -95,6 +104,15 @@ export async function updatePushToken(userId: string, pushToken: string): Promis
     'UPDATE users SET pushToken = ? WHERE id = ?',
     [pushToken, userId],
   );
+}
+
+export async function updatePassword(userId: string, passwordHash: string): Promise<boolean> {
+  const pool = getPool();
+  const [res] = await pool.query<ResultSetHeader>(
+    'UPDATE users SET passwordHash = ? WHERE id = ?',
+    [passwordHash, userId],
+  );
+  return res.affectedRows > 0;
 }
 
 export async function getAllPushTokens(): Promise<string[]> {

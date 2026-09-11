@@ -84,3 +84,12 @@ export interface CitizenDashboardStats {
   verified: number;
   savedOffline: number;
 }
+
+export interface ResolutionResult {
+  success: boolean;
+  isFixed: boolean;
+  reportStatus: ReportStatus;
+  resolvedAt?: string;
+  message: string;
+  report: RoadReport;
+}

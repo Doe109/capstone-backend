@@ -10,6 +10,7 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import * as reportsRepository from '../repositories/reportsRepository';
 import * as votesRepository from '../repositories/votesRepository';
+import * as advisoriesRepository from '../repositories/advisoriesRepository';
 import { authenticate } from '../middleware/auth';
 import { upload } from '../middleware/upload';
 import { ReportStatus, VoteType } from '../types/report';
@@ -209,6 +210,16 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
         );
       }
 
+      // Auto-generate GIS Advisory entry
+      advisoriesRepository.create({
+        id: uuidv4(),
+        title: `${report.conditionType} Warning`,
+        location: `Brgy. ${report.selectedBarangay}, Jimenez`,
+        selectedBarangay: report.selectedBarangay,
+        message: `Validated ${report.conditionType.toLowerCase()} reported in Brgy. ${report.selectedBarangay}. Motorists are advised to take caution.`,
+        issuedAt: now,
+      }).catch((advErr) => console.error('[AdvisoryTrigger] Error creating advisory:', advErr));
+
       // Trigger automatic push notification alert to all registered devices
       sendRoadAdvisoryNotification({
         reportId: report.id,
@@ -235,6 +246,61 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
     });
   } catch (error) {
     console.error('Vote error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error.' });
+  }
+});
+
+// ── POST /api/reports/:id/resolution ───────────────────────────────
+// Community Resolution / Status Update -> Has Road Condition Been Fixed?
+// YES -> Mark as Resolved Road Condition (reportStatus = 'Resolved', resolvedAt = NOW(), deactivate advisory)
+// NO  -> Keep Advisory Active (reportStatus remains 'Verified', advisory stays active)
+router.post('/:id/resolution', authenticate, async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+  try {
+    const reportId = req.params.id;
+    const { isFixed } = req.body as { isFixed: boolean };
+
+    if (typeof isFixed !== 'boolean') {
+      res.status(400).json({ success: false, error: 'isFixed (boolean) is required.' });
+      return;
+    }
+
+    const report = await reportsRepository.findReportById(reportId);
+    if (!report) {
+      res.status(404).json({ success: false, error: 'Report not found.' });
+      return;
+    }
+
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+    if (isFixed) {
+      // "Has Road Condition Been Fixed?" -> YES
+      // 1. Mark report as Resolved
+      const resolvedReport = await reportsRepository.resolveReport(reportId);
+
+      // 2. Deactivate active advisory for this road section
+      await advisoriesRepository.deactivateByBarangay(report.selectedBarangay);
+
+      res.status(200).json({
+        success: true,
+        isFixed: true,
+        reportStatus: 'Resolved',
+        resolvedAt: now,
+        message: 'Road condition marked as Resolved. Advisory deactivated.',
+        report: resolvedReport,
+      });
+    } else {
+      // "Has Road Condition Been Fixed?" -> NO
+      // Keep Advisory Active
+      res.status(200).json({
+        success: true,
+        isFixed: false,
+        reportStatus: report.reportStatus,
+        message: 'Road condition still active. Advisory remains active on GIS Map.',
+        report,
+      });
+    }
+  } catch (error) {
+    console.error('Resolution error:', error);
     res.status(500).json({ success: false, error: 'Internal server error.' });
   }
 });
