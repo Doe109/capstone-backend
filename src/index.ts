@@ -12,7 +12,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 
-import { testConnection } from './database/connection';
+import { testConnection, ensureSchemaUpToDate } from './database/connection';
 import authRoutes from './routes/auth';
 import reportsRoutes from './routes/reports';
 import advisoriesRoutes from './routes/advisories';
@@ -57,6 +57,7 @@ async function start() {
   try {
     await testConnection();
     console.log('✅ MySQL connection verified (SELECT 1 succeeded)');
+    await ensureSchemaUpToDate();
   } catch (error) {
     console.error('❌ MySQL connection FAILED:', error);
     console.error('   Check your .env DB_HOST / DB_USER / DB_PASSWORD / DB_NAME values.');
