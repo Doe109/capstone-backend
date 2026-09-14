@@ -211,12 +211,22 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
       }
 
       // Auto-generate GIS Advisory entry
+      const jimenezList = [
+        'Adorable', 'Butuay', 'Carmen', 'Corrales', 'Dicoloc', 'Gata', 'Guintomoyan',
+        'Macabayao', 'Malibacsan', 'Matugas Alto', 'Matugas Bajo', 'Mialem',
+        'Nacional (Poblacion)', 'Naga (Poblacion)', 'Palilan', 'Rizal (Poblacion)',
+        'San Isidro', 'Santa Cruz (Poblacion)', 'Seti', 'Sibaroc', 'Sinara Alto',
+        'Sinara Bajo', 'Tabo-o', 'Taraka (Poblacion)',
+      ];
+      const isJimenez = jimenezList.some((b) => b.toLowerCase() === (report.selectedBarangay || '').toLowerCase().trim());
+      const lguName = isJimenez ? 'Jimenez' : 'Ozamiz City';
+
       advisoriesRepository.create({
         id: uuidv4(),
         title: `${report.conditionType} Warning`,
-        location: `Brgy. ${report.selectedBarangay}, Jimenez`,
+        location: `Brgy. ${report.selectedBarangay}, ${lguName}`,
         selectedBarangay: report.selectedBarangay,
-        message: `Validated ${report.conditionType.toLowerCase()} reported in Brgy. ${report.selectedBarangay}. Motorists are advised to take caution.`,
+        message: `Validated ${report.conditionType.toLowerCase()} reported in Brgy. ${report.selectedBarangay}, ${lguName}. Motorists are advised to take caution.`,
         issuedAt: now,
       }).catch((advErr) => console.error('[AdvisoryTrigger] Error creating advisory:', advErr));
 
@@ -252,57 +262,62 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
 
 // ── POST /api/reports/:id/resolution ───────────────────────────────
 // Community Resolution / Status Update -> Has Road Condition Been Fixed?
-// YES -> Mark as Resolved Road Condition (reportStatus = 'Resolved', resolvedAt = NOW(), deactivate advisory)
+// YES -> Mark as Resolved Road Condition (reportStatus = 'Resolved', resolvedAt = NOW(), save resolution photo, deactivate advisory)
 // NO  -> Keep Advisory Active (reportStatus remains 'Verified', advisory stays active)
-router.post('/:id/resolution', authenticate, async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-  try {
-    const reportId = req.params.id;
-    const { isFixed } = req.body as { isFixed: boolean };
+router.post(
+  '/:id/resolution',
+  authenticate,
+  upload.single('resolutionPhoto'),
+  async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    try {
+      const reportId = req.params.id;
+      const user = req.user!;
+      const file = req.file;
+      const rawIsFixed = req.body.isFixed;
+      const isFixed = rawIsFixed === true || rawIsFixed === 'true' || rawIsFixed === 1 || rawIsFixed === '1';
 
-    if (typeof isFixed !== 'boolean') {
-      res.status(400).json({ success: false, error: 'isFixed (boolean) is required.' });
-      return;
+      const report = await reportsRepository.findReportById(reportId);
+      if (!report) {
+        res.status(404).json({ success: false, error: 'Report not found.' });
+        return;
+      }
+
+      const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      const resolutionPhotoUri = file ? `/uploads/${file.filename}` : null;
+
+      if (isFixed) {
+        // "Has Road Condition Been Fixed?" -> YES
+        // 1. Mark report as Resolved with resolution photo & verifier ID
+        const resolvedReport = await reportsRepository.resolveReport(reportId, resolutionPhotoUri, user.userId);
+
+        // 2. Deactivate active advisory for this road section
+        await advisoriesRepository.deactivateByBarangay(report.selectedBarangay);
+
+        res.status(200).json({
+          success: true,
+          isFixed: true,
+          reportStatus: 'Resolved',
+          resolvedAt: now,
+          resolutionPhotoUri: resolvedReport?.resolutionPhotoUri || resolutionPhotoUri,
+          message: 'Road condition marked as Resolved with verification photo. Advisory deactivated.',
+          report: resolvedReport,
+        });
+      } else {
+        // "Has Road Condition Been Fixed?" -> NO
+        // Keep Advisory Active
+        res.status(200).json({
+          success: true,
+          isFixed: false,
+          reportStatus: report.reportStatus,
+          message: 'Road condition still active. Advisory remains active on GIS Map.',
+          report,
+        });
+      }
+    } catch (error) {
+      console.error('Resolution error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error.' });
     }
-
-    const report = await reportsRepository.findReportById(reportId);
-    if (!report) {
-      res.status(404).json({ success: false, error: 'Report not found.' });
-      return;
-    }
-
-    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
-
-    if (isFixed) {
-      // "Has Road Condition Been Fixed?" -> YES
-      // 1. Mark report as Resolved
-      const resolvedReport = await reportsRepository.resolveReport(reportId);
-
-      // 2. Deactivate active advisory for this road section
-      await advisoriesRepository.deactivateByBarangay(report.selectedBarangay);
-
-      res.status(200).json({
-        success: true,
-        isFixed: true,
-        reportStatus: 'Resolved',
-        resolvedAt: now,
-        message: 'Road condition marked as Resolved. Advisory deactivated.',
-        report: resolvedReport,
-      });
-    } else {
-      // "Has Road Condition Been Fixed?" -> NO
-      // Keep Advisory Active
-      res.status(200).json({
-        success: true,
-        isFixed: false,
-        reportStatus: report.reportStatus,
-        message: 'Road condition still active. Advisory remains active on GIS Map.',
-        report,
-      });
-    }
-  } catch (error) {
-    console.error('Resolution error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error.' });
   }
-});
+);
 
 export default router;

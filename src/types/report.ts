@@ -58,6 +58,8 @@ export interface RoadReport {
 
   advisoryText: string | null;
   resolvedAt: string | null;
+  resolutionPhotoUri?: string | null;
+  resolvedByCitizenId?: string | null;
 }
 
 export interface CommunityVote {

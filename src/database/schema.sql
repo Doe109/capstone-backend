@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS reports (
   reportReliabilityScore DECIMAL(4, 3) DEFAULT 0.000,
   advisoryText TEXT,
   resolvedAt DATETIME,
+  resolutionPhotoUri VARCHAR(500) NULL,
+  resolvedByCitizenId VARCHAR(36) NULL,
   FOREIGN KEY (citizenId) REFERENCES users(id),
   INDEX idx_status (reportStatus),
   INDEX idx_barangay (selectedBarangay),

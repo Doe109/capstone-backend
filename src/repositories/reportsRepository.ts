@@ -51,6 +51,8 @@ function rowToReport(row: RowDataPacket): RoadReport {
     reportReliabilityScore: Number(row.reportReliabilityScore ?? 0),
     advisoryText: row.advisoryText ?? null,
     resolvedAt: row.resolvedAt ? formatIsoTimestamp(row.resolvedAt) : null,
+    resolutionPhotoUri: row.resolutionPhotoUri ?? null,
+    resolvedByCitizenId: row.resolvedByCitizenId ?? null,
   };
 }
 
@@ -106,15 +108,22 @@ export async function createReport(report: {
   return created;
 }
 
+/**
+ * Find a report by ID.
+ */
 export async function findReportById(id: string): Promise<RoadReport | null> {
   const pool = getPool();
   const [rows] = await pool.query<RowDataPacket[]>(
     'SELECT * FROM reports WHERE id = ?',
     [id],
   );
-  return rows.length > 0 ? rowToReport(rows[0]) : null;
+  if (rows.length === 0) return null;
+  return rowToReport(rows[0]);
 }
 
+/**
+ * List reports with optional filtering by status, barangay, or citizenId.
+ */
 export async function listReports(filters?: ReportFilters): Promise<RoadReport[]> {
   const pool = getPool();
   let sql = 'SELECT * FROM reports';
@@ -203,14 +212,18 @@ export async function updateReportScores(
 }
 
 /**
- * Mark a road condition report as Resolved and set resolvedAt timestamp.
+ * Mark a road condition report as Resolved, save the resolution photo, and set resolvedAt timestamp.
  */
-export async function resolveReport(reportId: string): Promise<RoadReport | null> {
+export async function resolveReport(
+  reportId: string,
+  resolutionPhotoUri?: string | null,
+  resolvedByCitizenId?: string | null
+): Promise<RoadReport | null> {
   const pool = getPool();
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
   await pool.query<ResultSetHeader>(
-    `UPDATE reports SET reportStatus = 'Resolved', resolvedAt = ?, updatedAt = ? WHERE id = ?`,
-    [now, now, reportId],
+    `UPDATE reports SET reportStatus = 'Resolved', resolvedAt = ?, updatedAt = ?, resolutionPhotoUri = COALESCE(?, resolutionPhotoUri), resolvedByCitizenId = COALESCE(?, resolvedByCitizenId) WHERE id = ?`,
+    [now, now, resolutionPhotoUri ?? null, resolvedByCitizenId ?? null, reportId],
   );
   return findReportById(reportId);
 }
