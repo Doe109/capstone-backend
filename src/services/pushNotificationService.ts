@@ -3,16 +3,16 @@ import * as usersRepository from '../repositories/usersRepository';
 
 const expo = new Expo();
 
-export interface RoadAdvisoryPushParams {
+export interface PushNotificationParams {
   reportId: string;
   conditionType: string;
   selectedBarangay: string;
 }
 
 /**
- * Send automatic push notifications to all registered devices when a report becomes Verified / crosses RRS threshold.
+ * Send automatic push notifications to all registered devices when a report is newly submitted (Pending Validation).
  */
-export async function sendRoadAdvisoryNotification(params: RoadAdvisoryPushParams): Promise<void> {
+export async function sendNewReportNotification(params: PushNotificationParams): Promise<void> {
   const { reportId, conditionType, selectedBarangay } = params;
 
   try {
@@ -32,9 +32,9 @@ export async function sendRoadAdvisoryNotification(params: RoadAdvisoryPushParam
       messages.push({
         to: token,
         sound: 'default',
-        title: 'Road Condition Advisory',
-        body: `${conditionType} hazard reported in Brgy. ${selectedBarangay} — drive carefully or avoid area.`,
-        data: { reportId },
+        title: `📢 Bag-ong Road Report: ${conditionType}`,
+        body: `Adunay bag-ong report nga ${conditionType} sa Brgy. ${selectedBarangay}. I-tap aron masusi ang dalan ug lokasyon sa mapa.`,
+        data: { reportId, screen: 'report-detail' },
         priority: 'high',
       });
     }
@@ -44,7 +44,57 @@ export async function sendRoadAdvisoryNotification(params: RoadAdvisoryPushParam
       return;
     }
 
-    console.log(`[pushNotificationService] Sending ${messages.length} push notification(s)...`);
+    console.log(`[pushNotificationService] Sending ${messages.length} new report push notification(s)...`);
+
+    const chunks = expo.chunkPushNotifications(messages);
+    for (const chunk of chunks) {
+      try {
+        await expo.sendPushNotificationsAsync(chunk);
+      } catch (error) {
+        console.error('[pushNotificationService] Error sending new report push chunk:', error);
+      }
+    }
+  } catch (err) {
+    console.error('[pushNotificationService] Failed to process new report push notifications:', err);
+  }
+}
+
+/**
+ * Send automatic push notifications to all registered devices when a report becomes Verified / crosses RRS threshold.
+ */
+export async function sendRoadAdvisoryNotification(params: PushNotificationParams): Promise<void> {
+  const { reportId, conditionType, selectedBarangay } = params;
+
+  try {
+    const rawTokens = await usersRepository.getAllPushTokens();
+    if (!rawTokens || rawTokens.length === 0) {
+      console.log('[pushNotificationService] No push tokens registered in database to notify.');
+      return;
+    }
+
+    const messages: ExpoPushMessage[] = [];
+    for (const token of rawTokens) {
+      if (!Expo.isExpoPushToken(token)) {
+        console.warn(`[pushNotificationService] Skipping invalid Expo push token: ${token}`);
+        continue;
+      }
+
+      messages.push({
+        to: token,
+        sound: 'default',
+        title: `⚠️ Road Hazard Advisory: ${conditionType}`,
+        body: `Adunay verified nga ${conditionType} sa Brgy. ${selectedBarangay}. I-tap aron masusi ang mapa ug lokasyon sa dalan.`,
+        data: { reportId, screen: 'report-detail' },
+        priority: 'high',
+      });
+    }
+
+    if (messages.length === 0) {
+      console.log('[pushNotificationService] No valid push tokens found for broadcast.');
+      return;
+    }
+
+    console.log(`[pushNotificationService] Sending ${messages.length} verified advisory push notification(s)...`);
 
     const chunks = expo.chunkPushNotifications(messages);
     const tickets: ExpoPushTicket[] = [];

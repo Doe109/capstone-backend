@@ -14,7 +14,7 @@ import * as advisoriesRepository from '../repositories/advisoriesRepository';
 import { authenticate } from '../middleware/auth';
 import { upload } from '../middleware/upload';
 import { ReportStatus, VoteType } from '../types/report';
-import { sendRoadAdvisoryNotification } from '../services/pushNotificationService';
+import { sendNewReportNotification, sendRoadAdvisoryNotification } from '../services/pushNotificationService';
 
 const router = Router();
 
@@ -87,6 +87,13 @@ router.post(
         submittedAt: now,
         locationEvidenceStatus: locationEvidenceStatus || 'Captured',
       });
+
+      // Broadcast community awareness notification for new report
+      sendNewReportNotification({
+        reportId: report.id,
+        conditionType: report.conditionType,
+        selectedBarangay: report.selectedBarangay,
+      }).catch((notifErr) => console.error('[CreateReport] Error broadcasting new report notification:', notifErr));
 
       res.status(201).json({ success: true, report });
     } catch (error: any) {
