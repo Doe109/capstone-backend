@@ -29,6 +29,20 @@ function formatMysqlDateTime(dateStr?: string): string {
   }
 }
 
+function calculateHaversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 // ── POST /api/reports ───────────────────────────────────────────────
 
 router.post(
@@ -56,6 +70,28 @@ router.post(
         res.status(400).json({
           success: false,
           error: 'conditionType and selectedBarangay are required.',
+        });
+        return;
+      }
+
+      const targetLat = parseFloat(reportLatitude) || parseFloat(capturedLatitude) || 0;
+      const targetLng = parseFloat(reportLongitude) || parseFloat(capturedLongitude) || 0;
+
+      // Duplicate Prevention Check: Search active reports of same condition within 30 meters
+      const allActiveReports = await reportsRepository.listReports();
+      const existingDuplicate = allActiveReports.find((r) => {
+        if (r.reportStatus === 'Resolved') return false;
+        if (r.conditionType.toLowerCase().trim() !== conditionType.toLowerCase().trim()) return false;
+        const dist = calculateHaversineDistanceMeters(targetLat, targetLng, r.reportLatitude, r.reportLongitude);
+        return dist <= 30;
+      });
+
+      if (existingDuplicate) {
+        res.status(409).json({
+          success: false,
+          isDuplicate: true,
+          error: `A ${conditionType} hazard is already active in this exact area (${existingDuplicate.selectedBarangay}). Please vote on the existing report to validate it for the community.`,
+          existingReport: existingDuplicate,
         });
         return;
       }
