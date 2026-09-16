@@ -22,29 +22,25 @@ export async function sendNewReportNotification(params: PushNotificationParams):
       return;
     }
 
-    const messages: ExpoPushMessage[] = [];
-    for (const token of rawTokens) {
-      if (!Expo.isExpoPushToken(token)) {
-        console.warn(`[pushNotificationService] Skipping invalid Expo push token: ${token}`);
-        continue;
-      }
+    // Strictly deduplicate valid Expo push tokens
+    const uniqueTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
 
-      messages.push({
-        to: token,
-        sound: 'default',
-        title: `📢 Bag-ong Road Report: ${conditionType}`,
-        body: `Adunay bag-ong report nga ${conditionType} sa Brgy. ${selectedBarangay}. I-tap aron masusi ang dalan ug lokasyon sa mapa.`,
-        data: { reportId, screen: 'report-detail' },
-        priority: 'high',
-      });
-    }
+    const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
+      to: token,
+      sound: 'default',
+      title: `📢 Bag-ong Road Report: ${conditionType}`,
+      body: `Adunay bag-ong report nga ${conditionType} sa Brgy. ${selectedBarangay}. I-tap aron masusi ang dalan ug lokasyon sa mapa.`,
+      data: { reportId, screen: 'report-detail' },
+      priority: 'high',
+      channelId: 'default',
+    }));
 
     if (messages.length === 0) {
       console.log('[pushNotificationService] No valid push tokens found for broadcast.');
       return;
     }
 
-    console.log(`[pushNotificationService] Sending ${messages.length} new report push notification(s)...`);
+    console.log(`[pushNotificationService] Sending ${messages.length} unique new report push notification(s)...`);
 
     const chunks = expo.chunkPushNotifications(messages);
     for (const chunk of chunks) {
@@ -72,22 +68,18 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
       return;
     }
 
-    const messages: ExpoPushMessage[] = [];
-    for (const token of rawTokens) {
-      if (!Expo.isExpoPushToken(token)) {
-        console.warn(`[pushNotificationService] Skipping invalid Expo push token: ${token}`);
-        continue;
-      }
+    // Strictly deduplicate valid Expo push tokens
+    const uniqueTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
 
-      messages.push({
-        to: token,
-        sound: 'default',
-        title: `⚠️ Road Hazard Advisory: ${conditionType}`,
-        body: `Adunay verified nga ${conditionType} sa Brgy. ${selectedBarangay}. I-tap aron masusi ang mapa ug lokasyon sa dalan.`,
-        data: { reportId, screen: 'report-detail' },
-        priority: 'high',
-      });
-    }
+    const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
+      to: token,
+      sound: 'default',
+      title: `⚠️ Road Hazard Advisory: ${conditionType}`,
+      body: `Adunay verified nga ${conditionType} sa Brgy. ${selectedBarangay}. I-tap aron masusi ang mapa ug lokasyon sa dalan.`,
+      data: { reportId, screen: 'report-detail' },
+      priority: 'high',
+      channelId: 'default',
+    }));
 
     if (messages.length === 0) {
       console.log('[pushNotificationService] No valid push tokens found for broadcast.');

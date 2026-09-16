@@ -100,6 +100,11 @@ export async function updateUser(
 
 export async function updatePushToken(userId: string, pushToken: string): Promise<void> {
   const pool = getPool();
+  // Clear this push token from other user accounts on this device to prevent duplicate broadcasts
+  await pool.query<ResultSetHeader>(
+    'UPDATE users SET pushToken = NULL WHERE pushToken = ? AND id != ?',
+    [pushToken, userId],
+  );
   await pool.query<ResultSetHeader>(
     'UPDATE users SET pushToken = ? WHERE id = ?',
     [pushToken, userId],
@@ -118,7 +123,13 @@ export async function updatePassword(userId: string, passwordHash: string): Prom
 export async function getAllPushTokens(): Promise<string[]> {
   const pool = getPool();
   const [rows] = await pool.query<RowDataPacket[]>(
-    'SELECT pushToken FROM users WHERE pushToken IS NOT NULL AND pushToken != ""',
+    'SELECT DISTINCT pushToken FROM users WHERE pushToken IS NOT NULL AND pushToken != ""',
   );
-  return rows.map((r) => r.pushToken as string);
+  const tokenSet = new Set<string>();
+  for (const r of rows) {
+    if (r.pushToken && typeof r.pushToken === 'string' && r.pushToken.trim()) {
+      tokenSet.add(r.pushToken.trim());
+    }
+  }
+  return Array.from(tokenSet);
 }
