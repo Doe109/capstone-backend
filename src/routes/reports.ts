@@ -295,6 +295,8 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
 
     let newStatus: any = undefined;
 
+    const shouldDispute = !isTestingOverride && total >= 3 && disagreeCount > agreeCount && communityValidationScore < 0.50;
+
     if (shouldVerify && wasNotVerified) {
       newStatus = 'Verified';
 
@@ -334,6 +336,11 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
         conditionType: report.conditionType,
         selectedBarangay: report.selectedBarangay,
       }).catch((pushErr) => console.error('[PushNotification] Error sending push advisory:', pushErr));
+    } else if (shouldDispute && report.reportStatus === 'Pending Validation') {
+      newStatus = 'Disputed';
+      console.log(
+        `[DisputeTrigger] DISPUTE THRESHOLD MET: Total votes (${total}) with ${disagreeCount} disputes marked report ${reportId} as Disputed.`
+      );
     }
 
     // Update score and status on the report row
