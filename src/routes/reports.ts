@@ -60,6 +60,7 @@ router.post(
       }
 
       const {
+        id,
         conditionType, description, photoCapturedAt,
         capturedLatitude, capturedLongitude, locationAccuracyMeters,
         reportLatitude, reportLongitude,
@@ -103,9 +104,10 @@ router.post(
 
       const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
       const photoUri = `/uploads/${file.filename}`;
+      const finalId = (id && typeof id === 'string' && id.trim()) ? id.trim() : uuidv4();
 
       const report = await reportsRepository.createReport({
-        id: uuidv4(),
+        id: finalId,
         citizenId: user.userId,
         citizenName: citizenName || 'Citizen',
         conditionType,
@@ -169,12 +171,15 @@ router.get('/', authenticate, async (req: Request, res: Response): Promise<void>
 
 router.get('/:id', authenticate, async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   try {
-    const report = await reportsRepository.findReportById(req.params.id);
+    const rawId = req.params.id;
+    const reportId = decodeURIComponent(rawId || '').trim();
+    const report = await reportsRepository.findReportById(reportId);
     if (!report) {
       res.status(404).json({ success: false, error: 'Report not found.' });
       return;
     }
-    res.json({ success: true, report });
+    const userVote = req.user ? await votesRepository.getUserVote(reportId, req.user.userId) : null;
+    res.json({ success: true, report, userVote });
   } catch (error) {
     console.error('Get report error:', error);
     res.status(500).json({ success: false, error: 'Internal server error.' });
@@ -186,8 +191,13 @@ router.get('/:id', authenticate, async (req: Request<{ id: string }>, res: Respo
 router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   try {
     const user = req.user!;
-    const reportId = req.params.id;
-    const { voteType } = req.body as { voteType: VoteType };
+    const rawId = req.params.id;
+    const reportId = decodeURIComponent(rawId || '').trim();
+    const { voteType, voterLatitude, voterLongitude } = req.body as {
+      voteType: VoteType;
+      voterLatitude?: number;
+      voterLongitude?: number;
+    };
 
     if (!voteType || !['agree', 'disagree'].includes(voteType)) {
       res.status(400).json({ success: false, error: 'voteType must be "agree" or "disagree".' });
@@ -199,6 +209,47 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
     if (!report) {
       res.status(404).json({ success: false, error: 'Report not found.' });
       return;
+    }
+
+    // Prevent author from voting on own report
+    if (report.citizenId === user.userId) {
+      res.status(403).json({
+        success: false,
+        error: 'As the author of this report, you cannot submit a community validation vote on your own submission.',
+      });
+      return;
+    }
+
+    // Prevent double voting
+    const existingVote = await votesRepository.getUserVote(reportId, user.userId);
+    if (existingVote) {
+      res.status(409).json({
+        success: false,
+        error: `You have already submitted a validation vote (${existingVote === 'agree' ? 'Confirmed' : 'Disputed'}) on this road hazard.`,
+        userVote: existingVote,
+      });
+      return;
+    }
+
+    // Enforce 100m Proximity Voting Gate if voter coordinates are supplied
+    const targetLat = report.reportLatitude || report.capturedLatitude;
+    const targetLng = report.reportLongitude || report.capturedLongitude;
+    let distanceMeters: number | null = null;
+
+    if (
+      typeof voterLatitude === 'number' &&
+      typeof voterLongitude === 'number' &&
+      targetLat &&
+      targetLng
+    ) {
+      distanceMeters = calculateHaversineDistanceMeters(voterLatitude, voterLongitude, targetLat, targetLng);
+      if (distanceMeters > 100) {
+        res.status(403).json({
+          success: false,
+          error: `Voting is only permitted within 100 meters of the reported road condition (you are currently ${Math.round(distanceMeters)}m away).`,
+        });
+        return;
+      }
     }
 
     // Insert vote (catches duplicate-key cleanly)
@@ -219,22 +270,26 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
     // Increment the count on the report row
     await reportsRepository.incrementVoteCount(reportId, voteType);
 
-    // Recompute communityValidationScore and reportReliabilityScore from actual tallies
+    // Recompute communityValidationScore (CV) using Laplace Smoothing: (agreeCount + 1) / (total + 2)
     const { agreeCount, disagreeCount } = await votesRepository.getVoteCounts(reportId);
     const total = agreeCount + disagreeCount;
-    const communityValidationScore = total > 0
-      ? parseFloat((agreeCount / total).toFixed(3))
-      : 0;
+    const communityValidationScore = parseFloat(((agreeCount + 1) / (total + 2)).toFixed(3));
 
-    const locationValidationScore = report.locationAccuracyMeters <= 20 ? 1.0 : 0.5;
+    // Dual-Radii Location Verification Score (LVS):
+    // If vote was cast on-site within 30m -> LVS = 1.0; else (30m - 100m) -> LVS = 0.0 (or default capture accuracy score if no voter coords)
+    const isWithin30m = distanceMeters !== null ? distanceMeters <= 30 : report.locationAccuracyMeters <= 20;
+    const locationValidationScore = isWithin30m ? 1.0 : 0.0;
+
+    // Road Reliability Score: RRS = 0.60 * CV + 0.40 * LVS
     const reportReliabilityScore = parseFloat(
       ((0.6 * communityValidationScore) + (0.4 * locationValidationScore)).toFixed(3)
     );
 
     const isTestingOverride = process.env.TESTING_SINGLE_VOTE_VERIFY === 'true';
+    // Production verification requires minimum 3 independent validators and RRS >= 0.70
     const shouldVerify = isTestingOverride
-      ? agreeCount >= 1 // TEMP: 1 agree vote = instantly verified, for testing only
-      : reportReliabilityScore >= 0.80; // real manuscript production threshold
+      ? agreeCount >= 1 // DEMO/TESTING OVERRIDE ONLY
+      : total >= 3 && reportReliabilityScore >= 0.70;
 
     const wasNotVerified = report.reportStatus !== 'Verified';
 
@@ -249,7 +304,7 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
         );
       } else {
         console.log(
-          `[AdvisoryTrigger] MANUSCRIPT RRS THRESHOLD MET: RRS (${reportReliabilityScore}) >= 0.80 marked report ${reportId} as Verified.`
+          `[AdvisoryTrigger] MANUSCRIPT RRS THRESHOLD MET: Total votes (${total}) >= 3 and RRS (${reportReliabilityScore}) >= 0.70 marked report ${reportId} as Verified.`
         );
       }
 
@@ -313,7 +368,8 @@ router.post(
   upload.single('resolutionPhoto'),
   async (req: Request<{ id: string }>, res: Response): Promise<void> => {
     try {
-      const reportId = req.params.id;
+      const rawId = req.params.id;
+      const reportId = decodeURIComponent(rawId || '').trim();
       const user = req.user!;
       const file = req.file;
       const rawIsFixed = req.body.isFixed;

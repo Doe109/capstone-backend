@@ -38,6 +38,22 @@ export async function createVote(vote: {
 }
 
 /**
+ * Get a citizen's vote on a specific report.
+ */
+export async function getUserVote(
+  reportId: string,
+  citizenId: string,
+): Promise<VoteType | null> {
+  const pool = getPool();
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT voteType FROM community_votes WHERE reportId = ? AND citizenId = ? LIMIT 1`,
+    [reportId, citizenId],
+  );
+  if (rows.length === 0) return null;
+  return rows[0].voteType as VoteType;
+}
+
+/**
  * Get the current agree/disagree tallies for a report.
  */
 export async function getVoteCounts(

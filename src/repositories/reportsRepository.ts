@@ -113,9 +113,10 @@ export async function createReport(report: {
  */
 export async function findReportById(id: string): Promise<RoadReport | null> {
   const pool = getPool();
+  const cleanId = (id || '').trim();
   const [rows] = await pool.query<RowDataPacket[]>(
-    'SELECT * FROM reports WHERE id = ?',
-    [id],
+    'SELECT * FROM reports WHERE id = ? OR id = ? LIMIT 1',
+    [cleanId, id],
   );
   if (rows.length === 0) return null;
   return rowToReport(rows[0]);

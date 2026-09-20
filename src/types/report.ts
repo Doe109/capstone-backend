@@ -60,6 +60,7 @@ export interface RoadReport {
   resolvedAt: string | null;
   resolutionPhotoUri?: string | null;
   resolvedByCitizenId?: string | null;
+  userVote?: VoteType | null;
 }
 
 export interface CommunityVote {
