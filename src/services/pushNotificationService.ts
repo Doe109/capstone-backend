@@ -74,8 +74,8 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
     const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
       to: token,
       sound: 'default',
-      title: `⚠️ Road Hazard Advisory: ${conditionType}`,
-      body: `Adunay verified nga ${conditionType} sa Brgy. ${selectedBarangay}. I-tap aron masusi ang mapa ug lokasyon sa dalan.`,
+      title: `⚠️ Travel with Caution • ${conditionType} Advisory`,
+      body: `Verified ${conditionType.toLowerCase()} in Brgy. ${selectedBarangay}. Motorists are advised to reduce speed and travel with caution.`,
       data: { reportId, screen: 'report-detail' },
       priority: 'high',
       channelId: 'default',
