@@ -32,8 +32,16 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve uploaded photos as static files
-app.use('/uploads', express.static(uploadsDir));
+// Serve uploaded photos as static files with aggressive client caching
+app.use(
+  '/uploads',
+  express.static(uploadsDir, {
+    maxAge: '30d',
+    immutable: true,
+    etag: true,
+    lastModified: true,
+  })
+);
 
 // ── Health check ────────────────────────────────────────────────────
 app.get('/api/health', async (_req, res) => {
