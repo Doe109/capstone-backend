@@ -17,10 +17,6 @@ function rowToUser(row: RowDataPacket): User {
     fullName: row.fullName,
     firstName: row.firstName ?? undefined,
     lastName: row.lastName ?? undefined,
-    mobileNumber: row.mobileNumber ?? undefined,
-    phone: row.phone ?? undefined,
-    address: row.address ?? undefined,
-    profilePhotoUri: row.profilePhotoUri ?? undefined,
     pushToken: row.pushToken ?? undefined,
     createdAt: row.createdAt,
   };
@@ -81,7 +77,7 @@ export async function findUserRowById(id: string): Promise<UserRow | null> {
 
 export async function updateUser(
   id: string,
-  updates: Partial<Pick<User, 'fullName' | 'firstName' | 'lastName' | 'email' | 'phone' | 'address' | 'profilePhotoUri' | 'pushToken'>>,
+  updates: Partial<Pick<User, 'fullName' | 'firstName' | 'lastName' | 'email' | 'pushToken'>>,
 ): Promise<User | null> {
   const entries = Object.entries(updates).filter(([, v]) => v !== undefined);
   if (entries.length === 0) return findUserById(id);

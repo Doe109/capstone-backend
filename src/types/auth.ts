@@ -9,10 +9,6 @@ export interface User {
   fullName: string;
   firstName?: string;
   lastName?: string;
-  mobileNumber?: string;
-  phone?: string;
-  address?: string;
-  profilePhotoUri?: string;
   pushToken?: string;
   createdAt: string;
 }

@@ -9,7 +9,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import * as usersRepository from '../repositories/usersRepository';
 import { authenticate } from '../middleware/auth';
-import { upload } from '../middleware/upload';
+import * as pushNotificationService from '../services/pushNotificationService';
 
 const router = Router();
 const SALT_ROUNDS = 12;
@@ -34,7 +34,7 @@ router.get('/me', authenticate, async (req: Request, res: Response): Promise<voi
 
 router.patch('/me', authenticate, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { fullName, firstName, lastName, email, phone, address, profilePhotoUri } = req.body;
+    const { fullName, firstName, lastName, email } = req.body;
 
     if (email) {
       const existing = await usersRepository.findUserByEmail(email);
@@ -49,9 +49,6 @@ router.patch('/me', authenticate, async (req: Request, res: Response): Promise<v
       firstName,
       lastName,
       email,
-      phone,
-      address,
-      profilePhotoUri,
     });
 
     if (!user) {
@@ -65,36 +62,6 @@ router.patch('/me', authenticate, async (req: Request, res: Response): Promise<v
     res.status(500).json({ success: false, error: 'Internal server error.' });
   }
 });
-
-// ── POST /api/users/me/photo ────────────────────────────────────────
-
-router.post(
-  '/me/photo',
-  authenticate,
-  upload.single('photo'),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const file = req.file;
-      if (!file) {
-        res.status(400).json({ success: false, error: 'Photo file is required.' });
-        return;
-      }
-
-      const profilePhotoUri = `/uploads/${file.filename}`;
-
-      const user = await usersRepository.updateUser(req.user!.userId, { profilePhotoUri });
-      if (!user) {
-        res.status(404).json({ success: false, error: 'User not found.' });
-        return;
-      }
-
-      res.json({ success: true, user });
-    } catch (error) {
-      console.error('Upload photo error:', error);
-      res.status(500).json({ success: false, error: 'Internal server error.' });
-    }
-  },
-);
 
 // ── POST /api/users/me/push-token ──────────────────────────────────
 
@@ -114,6 +81,35 @@ router.post('/me/push-token', authenticate, async (req: Request, res: Response):
     res.status(500).json({ success: false, error: 'Internal server error.' });
   }
 });
+
+// ── POST /api/users/test-push (Diagnostic Push Broadcast) ───────────
+
+router.post('/test-push', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const result = await pushNotificationService.sendTestPushNotification();
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    console.error('Test push error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Internal server error.' });
+  }
+});
+
+// ── GET /api/users/push-tokens (Diagnostic Token Count) ────────────
+
+router.get('/push-tokens', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const rawTokens = await usersRepository.getAllPushTokens();
+    res.json({
+      success: true,
+      totalRegisteredTokens: rawTokens.length,
+      tokens: rawTokens.map((t) => t.substring(0, 15) + '...'),
+    });
+  } catch (error: any) {
+    console.error('Get push tokens error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Internal server error.' });
+  }
+});
+
 
 // ── PATCH /api/users/me/password ────────────────────────────────────
 

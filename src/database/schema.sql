@@ -19,10 +19,6 @@ CREATE TABLE IF NOT EXISTS users (
   fullName VARCHAR(255) NOT NULL,
   firstName VARCHAR(100),
   lastName VARCHAR(100),
-  mobileNumber VARCHAR(20),
-  phone VARCHAR(20),
-  address VARCHAR(255),
-  profilePhotoUri VARCHAR(500),
   pushToken VARCHAR(255),
   createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;

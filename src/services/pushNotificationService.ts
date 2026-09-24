@@ -113,3 +113,55 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
     console.error('[pushNotificationService] Failed to process push notifications:', err);
   }
 }
+
+/**
+ * Send an immediate test push notification to all registered tokens for live verification.
+ */
+export async function sendTestPushNotification(): Promise<{
+  totalTokens: number;
+  validTokens: number;
+  tickets: ExpoPushTicket[];
+  errors: string[];
+}> {
+  const errors: string[] = [];
+  const rawTokens = await usersRepository.getAllPushTokens();
+  const validTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
+
+  if (validTokens.length === 0) {
+    return {
+      totalTokens: rawTokens.length,
+      validTokens: 0,
+      tickets: [],
+      errors: ['No valid Expo push tokens found in database. Please make sure the app is opened and logged in on at least one device.'],
+    };
+  }
+
+  const messages: ExpoPushMessage[] = validTokens.map((token) => ({
+    to: token,
+    sound: 'default',
+    title: '🔔 RoadWatch Push Notification Test',
+    body: 'Kini usa ka test notification gikan sa RoadWatch system. 100% active ug naglihok ang push service!',
+    data: { test: true, timestamp: new Date().toISOString() },
+    priority: 'high',
+    channelId: 'default',
+  }));
+
+  const chunks = expo.chunkPushNotifications(messages);
+  const tickets: ExpoPushTicket[] = [];
+
+  for (const chunk of chunks) {
+    try {
+      const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+      tickets.push(...ticketChunk);
+    } catch (err: any) {
+      errors.push(err?.message || String(err));
+    }
+  }
+
+  return {
+    totalTokens: rawTokens.length,
+    validTokens: validTokens.length,
+    tickets,
+    errors,
+  };
+}
