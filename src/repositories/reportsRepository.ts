@@ -110,12 +110,16 @@ export async function createReport(report: {
 
 /**
  * Find a report by ID.
+ * Disputed reports expire and disappear totally 1 hour after being disputed.
  */
 export async function findReportById(id: string): Promise<RoadReport | null> {
   const pool = getPool();
   const cleanId = (id || '').trim();
   const [rows] = await pool.query<RowDataPacket[]>(
-    'SELECT * FROM reports WHERE id = ? OR id = ? LIMIT 1',
+    `SELECT * FROM reports 
+     WHERE (id = ? OR id = ?) 
+       AND NOT (reportStatus = 'Disputed' AND updatedAt < NOW() - INTERVAL 1 HOUR)
+     LIMIT 1`,
     [cleanId, id],
   );
   if (rows.length === 0) return null;
@@ -124,12 +128,15 @@ export async function findReportById(id: string): Promise<RoadReport | null> {
 
 /**
  * List reports with optional filtering by status, barangay, or citizenId.
+ * Disputed reports expire and disappear totally 1 hour after being disputed.
  */
 export async function listReports(filters?: ReportFilters): Promise<RoadReport[]> {
   const pool = getPool();
   let sql = 'SELECT * FROM reports';
   const params: unknown[] = [];
-  const clauses: string[] = [];
+  const clauses: string[] = [
+    "NOT (reportStatus = 'Disputed' AND updatedAt < NOW() - INTERVAL 1 HOUR)",
+  ];
 
   if (filters?.status) {
     clauses.push('reportStatus = ?');
