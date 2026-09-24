@@ -6,7 +6,7 @@
 
 import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { getPool } from '../database/connection';
-import { RoadReport, ReportStatus, VoteType } from '../types/report';
+import { ReportStatus, RoadReport, VoteType } from '../types/report';
 
 function formatIsoTimestamp(val: any): string {
   if (!val) return val;
@@ -110,7 +110,7 @@ export async function createReport(report: {
 
 /**
  * Find a report by ID.
- * Disputed reports expire and disappear totally 1 hour after being disputed.
+ * Disputed reports expire and disappear totally 10 minutes after being disputed.
  */
 export async function findReportById(id: string): Promise<RoadReport | null> {
   const pool = getPool();
@@ -118,7 +118,7 @@ export async function findReportById(id: string): Promise<RoadReport | null> {
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT * FROM reports 
      WHERE (id = ? OR id = ?) 
-       AND NOT (reportStatus = 'Disputed' AND updatedAt < NOW() - INTERVAL 1 HOUR)
+       AND NOT (reportStatus = 'Disputed' AND updatedAt < NOW() - INTERVAL 10 MINUTE)
      LIMIT 1`,
     [cleanId, id],
   );
@@ -128,14 +128,14 @@ export async function findReportById(id: string): Promise<RoadReport | null> {
 
 /**
  * List reports with optional filtering by status, barangay, or citizenId.
- * Disputed reports expire and disappear totally 1 hour after being disputed.
+ * Disputed reports expire and disappear totally 10 minutes after being disputed.
  */
 export async function listReports(filters?: ReportFilters): Promise<RoadReport[]> {
   const pool = getPool();
   let sql = 'SELECT * FROM reports';
   const params: unknown[] = [];
   const clauses: string[] = [
-    "NOT (reportStatus = 'Disputed' AND updatedAt < NOW() - INTERVAL 1 HOUR)",
+    "NOT (reportStatus = 'Disputed' AND updatedAt < NOW() - INTERVAL 10 MINUTE)",
   ];
 
   if (filters?.status) {
