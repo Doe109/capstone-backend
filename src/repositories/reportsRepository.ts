@@ -110,15 +110,15 @@ export async function createReport(report: {
 
 /**
  * Find a report by ID.
- * Disputed reports expire and disappear totally 10 minutes after being disputed.
+ * Disputed reports are immediately excluded and disappear totally from public queries.
  */
-export async function findReportById(id: string): Promise<RoadReport | null> {
+export async function findReportById(id: string, includeDisputed: boolean = false): Promise<RoadReport | null> {
   const pool = getPool();
   const cleanId = (id || '').trim();
+  const disputedClause = includeDisputed ? '' : "AND reportStatus != 'Disputed'";
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT * FROM reports 
-     WHERE (id = ? OR id = ?) 
-       AND NOT (reportStatus = 'Disputed' AND updatedAt < NOW() - INTERVAL 10 MINUTE)
+     WHERE (id = ? OR id = ?) ${disputedClause}
      LIMIT 1`,
     [cleanId, id],
   );
@@ -128,14 +128,14 @@ export async function findReportById(id: string): Promise<RoadReport | null> {
 
 /**
  * List reports with optional filtering by status, barangay, or citizenId.
- * Disputed reports expire and disappear totally 10 minutes after being disputed.
+ * Disputed reports are immediately excluded and disappear totally.
  */
 export async function listReports(filters?: ReportFilters): Promise<RoadReport[]> {
   const pool = getPool();
   let sql = 'SELECT * FROM reports';
   const params: unknown[] = [];
   const clauses: string[] = [
-    "NOT (reportStatus = 'Disputed' AND updatedAt < NOW() - INTERVAL 10 MINUTE)",
+    "reportStatus != 'Disputed'",
   ];
 
   if (filters?.status) {
@@ -216,7 +216,7 @@ export async function updateReportScores(
     [...values, reportId],
   );
 
-  return findReportById(reportId);
+  return findReportById(reportId, true);
 }
 
 /**
