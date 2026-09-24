@@ -116,11 +116,15 @@ export async function updatePassword(userId: string, passwordHash: string): Prom
   return res.affectedRows > 0;
 }
 
-export async function getAllPushTokens(): Promise<string[]> {
+export async function getAllPushTokens(excludeUserId?: string): Promise<string[]> {
   const pool = getPool();
-  const [rows] = await pool.query<RowDataPacket[]>(
-    'SELECT DISTINCT pushToken FROM users WHERE pushToken IS NOT NULL AND pushToken != ""',
-  );
+  let query = 'SELECT DISTINCT pushToken FROM users WHERE pushToken IS NOT NULL AND pushToken != ""';
+  const params: any[] = [];
+  if (excludeUserId) {
+    query += ' AND id != ?';
+    params.push(excludeUserId);
+  }
+  const [rows] = await pool.query<RowDataPacket[]>(query, params);
   const tokenSet = new Set<string>();
   for (const r of rows) {
     if (r.pushToken && typeof r.pushToken === 'string' && r.pushToken.trim()) {

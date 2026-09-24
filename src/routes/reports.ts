@@ -126,11 +126,12 @@ router.post(
         locationEvidenceStatus: locationEvidenceStatus || 'Captured',
       });
 
-      // Broadcast community awareness notification for new report
+      // Broadcast community awareness notification for new report (excludes reporter)
       sendNewReportNotification({
         reportId: report.id,
         conditionType: report.conditionType,
         selectedBarangay: report.selectedBarangay,
+        reporterUserId: user.userId,
       }).catch((notifErr) => console.error('[CreateReport] Error broadcasting new report notification:', notifErr));
 
       res.status(201).json({ success: true, report });

@@ -7,6 +7,7 @@ export interface PushNotificationParams {
   reportId: string;
   conditionType: string;
   selectedBarangay: string;
+  reporterUserId?: string;
 }
 
 /**
@@ -44,12 +45,13 @@ async function sendPushMessagesSafely(
 
 /**
  * Send automatic push notifications to all registered devices when a report is newly submitted (Pending Validation).
+ * Excludes the reporter so they don't receive an alert for their own submission.
  */
 export async function sendNewReportNotification(params: PushNotificationParams): Promise<void> {
-  const { reportId, conditionType, selectedBarangay } = params;
+  const { reportId, conditionType, selectedBarangay, reporterUserId } = params;
 
   try {
-    const rawTokens = await usersRepository.getAllPushTokens();
+    const rawTokens = await usersRepository.getAllPushTokens(reporterUserId);
     if (!rawTokens || rawTokens.length === 0) {
       console.log('[pushNotificationService] No push tokens registered in database to notify.');
       return;
