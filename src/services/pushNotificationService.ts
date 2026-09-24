@@ -10,6 +10,52 @@ export interface PushNotificationParams {
 }
 
 /**
+ * Safely send push notifications in chunks with automatic single-token fallback
+ * so that a conflicting or stale token never blocks other valid devices from receiving alerts.
+ */
+async function sendPushMessagesSafely(
+  messages: ExpoPushMessage[]
+): Promise<{ tickets: ExpoPushTicket[]; errors: string[] }> {
+  const tickets: ExpoPushTicket[] = [];
+  const errors: string[] = [];
+
+  const chunks = expo.chunkPushNotifications(messages);
+  for (const chunk of chunks) {
+    try {
+      const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+      tickets.push(...ticketChunk);
+    } catch (chunkError: any) {
+      console.warn(
+        '[pushNotificationService] Chunk dispatch error, isolating into individual deliveries:',
+        chunkError?.message
+      );
+      // Fallback: Deliver to each token individually so valid devices still receive the notification
+      for (const msg of chunk) {
+        try {
+          const singleTicket = await expo.sendPushNotificationsAsync([msg]);
+          tickets.push(...singleTicket);
+        } catch (singleErr: any) {
+          const errStr = singleErr?.message || String(singleErr);
+          console.error(`[pushNotificationService] Error sending to token ${msg.to}:`, errStr);
+          errors.push(`Token ${String(msg.to).substring(0, 20)}...: ${errStr}`);
+        }
+      }
+    }
+  }
+
+  // Log individual ticket errors (e.g. DeviceNotRegistered)
+  for (const ticket of tickets) {
+    if (ticket.status === 'error') {
+      console.warn(
+        `[pushNotificationService] Push delivery ticket error: ${ticket.message} (${ticket.details?.error})`
+      );
+    }
+  }
+
+  return { tickets, errors };
+}
+
+/**
  * Send automatic push notifications to all registered devices when a report is newly submitted (Pending Validation).
  */
 export async function sendNewReportNotification(params: PushNotificationParams): Promise<void> {
@@ -22,9 +68,7 @@ export async function sendNewReportNotification(params: PushNotificationParams):
       return;
     }
 
-    // Strictly deduplicate valid Expo push tokens
     const uniqueTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
-
     const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
       to: token,
       sound: 'default',
@@ -40,16 +84,8 @@ export async function sendNewReportNotification(params: PushNotificationParams):
       return;
     }
 
-    console.log(`[pushNotificationService] Sending ${messages.length} unique new report push notification(s)...`);
-
-    const chunks = expo.chunkPushNotifications(messages);
-    for (const chunk of chunks) {
-      try {
-        await expo.sendPushNotificationsAsync(chunk);
-      } catch (error) {
-        console.error('[pushNotificationService] Error sending new report push chunk:', error);
-      }
-    }
+    console.log(`[pushNotificationService] Sending ${messages.length} new report push notification(s)...`);
+    await sendPushMessagesSafely(messages);
   } catch (err) {
     console.error('[pushNotificationService] Failed to process new report push notifications:', err);
   }
@@ -68,9 +104,7 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
       return;
     }
 
-    // Strictly deduplicate valid Expo push tokens
     const uniqueTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
-
     const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
       to: token,
       sound: 'default',
@@ -87,28 +121,7 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
     }
 
     console.log(`[pushNotificationService] Sending ${messages.length} verified advisory push notification(s)...`);
-
-    const chunks = expo.chunkPushNotifications(messages);
-    const tickets: ExpoPushTicket[] = [];
-
-    for (const chunk of chunks) {
-      try {
-        const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
-        tickets.push(...ticketChunk);
-      } catch (error) {
-        console.error('[pushNotificationService] Error sending push chunk:', error);
-      }
-    }
-
-    // Inspect tickets for invalid/expired token errors
-    for (let i = 0; i < tickets.length; i++) {
-      const ticket = tickets[i];
-      if (ticket.status === 'error') {
-        console.warn(
-          `[pushNotificationService] Push delivery error for token: ${ticket.message} (${ticket.details?.error})`
-        );
-      }
-    }
+    await sendPushMessagesSafely(messages);
   } catch (err) {
     console.error('[pushNotificationService] Failed to process push notifications:', err);
   }
@@ -123,7 +136,6 @@ export async function sendTestPushNotification(): Promise<{
   tickets: ExpoPushTicket[];
   errors: string[];
 }> {
-  const errors: string[] = [];
   const rawTokens = await usersRepository.getAllPushTokens();
   const validTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
 
@@ -146,17 +158,7 @@ export async function sendTestPushNotification(): Promise<{
     channelId: 'default',
   }));
 
-  const chunks = expo.chunkPushNotifications(messages);
-  const tickets: ExpoPushTicket[] = [];
-
-  for (const chunk of chunks) {
-    try {
-      const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
-      tickets.push(...ticketChunk);
-    } catch (err: any) {
-      errors.push(err?.message || String(err));
-    }
-  }
+  const { tickets, errors } = await sendPushMessagesSafely(messages);
 
   return {
     totalTokens: rawTokens.length,
@@ -165,3 +167,4 @@ export async function sendTestPushNotification(): Promise<{
     errors,
   };
 }
+
