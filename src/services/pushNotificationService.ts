@@ -10,7 +10,7 @@ export interface PushNotificationParams {
 }
 
 /**
- * Safely send push notifications in chunks with automatic single-token fallback
+ * Safely send push notifications with single-token isolation
  * so that a conflicting or stale token never blocks other valid devices from receiving alerts.
  */
 async function sendPushMessagesSafely(
@@ -19,27 +19,14 @@ async function sendPushMessagesSafely(
   const tickets: ExpoPushTicket[] = [];
   const errors: string[] = [];
 
-  const chunks = expo.chunkPushNotifications(messages);
-  for (const chunk of chunks) {
+  for (const msg of messages) {
     try {
-      const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
-      tickets.push(...ticketChunk);
-    } catch (chunkError: any) {
-      console.warn(
-        '[pushNotificationService] Chunk dispatch error, isolating into individual deliveries:',
-        chunkError?.message
-      );
-      // Fallback: Deliver to each token individually so valid devices still receive the notification
-      for (const msg of chunk) {
-        try {
-          const singleTicket = await expo.sendPushNotificationsAsync([msg]);
-          tickets.push(...singleTicket);
-        } catch (singleErr: any) {
-          const errStr = singleErr?.message || String(singleErr);
-          console.error(`[pushNotificationService] Error sending to token ${msg.to}:`, errStr);
-          errors.push(`Token ${String(msg.to).substring(0, 20)}...: ${errStr}`);
-        }
-      }
+      const singleTicket = await expo.sendPushNotificationsAsync([msg]);
+      tickets.push(...singleTicket);
+    } catch (singleErr: any) {
+      const errStr = singleErr?.message || String(singleErr);
+      console.warn(`[pushNotificationService] Failed to send to token ${msg.to}:`, errStr);
+      errors.push(`Token ${String(msg.to).substring(0, 20)}...: ${errStr}`);
     }
   }
 

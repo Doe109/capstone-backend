@@ -101,6 +101,7 @@ router.get('/push-tokens', async (_req: Request, res: Response): Promise<void> =
     const rawTokens = await usersRepository.getAllPushTokens();
     res.json({
       success: true,
+      version: 'v3-isolated',
       totalRegisteredTokens: rawTokens.length,
       tokens: rawTokens.map((t) => t.substring(0, 15) + '...'),
     });
