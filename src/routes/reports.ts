@@ -19,6 +19,7 @@ import {
   sendRoadAdvisoryNotification,
   sendRepairUnderReviewNotification,
   sendRepairResolvedNotification,
+  sendSubmitterRepairCelebrationNotification,
 } from '../services/pushNotificationService';
 import { optimizeUploadedImage } from '../utils/imageOptimizer';
 
@@ -544,12 +545,25 @@ router.post(
         finalReport = await reportsRepository.resolveReport(reportId, freshReport?.resolutionPhotoUri, freshReport?.resolvedByCitizenId);
         await advisoriesRepository.deactivateByBarangay(report.selectedBarangay);
 
+        const repairSubmitterId = freshReport?.resolvedByCitizenId;
+
+        // Broadcast to all other citizens in the community (excluding submitter)
         sendRepairResolvedNotification({
           reportId: report.id,
           conditionType: report.conditionType,
           selectedBarangay: report.selectedBarangay,
-          excludeUserId: user.userId,
+          excludeUserId: repairSubmitterId || user.userId,
         }).catch((pushErr) => console.error('[PushNotification] Error sending repair resolved push:', pushErr));
+
+        // Send personal celebration push notification directly to the repair submitter
+        if (repairSubmitterId) {
+          sendSubmitterRepairCelebrationNotification({
+            reportId: report.id,
+            conditionType: report.conditionType,
+            selectedBarangay: report.selectedBarangay,
+            submitterUserId: repairSubmitterId,
+          }).catch((pushErr) => console.error('[PushNotification] Error sending submitter celebration push:', pushErr));
+        }
 
         console.log(`[RepairResolution] ✅ Report ${reportId} officially marked as Resolved by community vote consensus.`);
       } else if (shouldRevertToVerified) {

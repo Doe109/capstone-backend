@@ -199,6 +199,44 @@ export async function sendRepairResolvedNotification(params: {
 }
 
 /**
+ * Send a personal celebration push notification to the citizen who submitted the repair photo
+ * when the community confirms by consensus that the road is now officially fixed (Resolved).
+ */
+export async function sendSubmitterRepairCelebrationNotification(params: {
+  reportId: string;
+  conditionType: string;
+  selectedBarangay: string;
+  submitterUserId: string;
+}): Promise<void> {
+  const { reportId, conditionType, selectedBarangay, submitterUserId } = params;
+
+  try {
+    const user = await usersRepository.findUserById(submitterUserId);
+    if (!user || !user.pushToken || !Expo.isExpoPushToken(user.pushToken)) {
+      console.log(`[pushNotificationService] Submitter ${submitterUserId} does not have a valid push token for celebration.`);
+      return;
+    }
+
+    const messages: ExpoPushMessage[] = [
+      {
+        to: user.pushToken,
+        sound: 'default',
+        title: '🎉 Kumpirmado! Na-verify ang Imong Gi-submit nga Repair',
+        body: `Kumpirmado sa komunidad nga opisyal nang na-ayo ang ${conditionType} sa Brgy. ${selectedBarangay} base sa imong gi-submit nga litrato. Daghang salamat sa imong kontribusyon!`,
+        data: { reportId, screen: 'report-detail', type: 'repair_resolved_celebration' },
+        priority: 'high',
+        channelId: 'default',
+      },
+    ];
+
+    console.log(`[pushNotificationService] Sending celebration push notification to repair submitter (${submitterUserId})...`);
+    await sendPushMessagesSafely(messages);
+  } catch (err) {
+    console.error('[pushNotificationService] Failed to send submitter celebration push notification:', err);
+  }
+}
+
+/**
  * Send an immediate test push notification to all registered tokens for live verification.
  */
 export async function sendTestPushNotification(): Promise<{
