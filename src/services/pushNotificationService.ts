@@ -80,6 +80,8 @@ export async function sendNewReportNotification(params: PushNotificationParams):
   }
 }
 
+import { getRecommendedAction } from '../routes/reports';
+
 /**
  * Send automatic push notifications to all registered devices when a report becomes Verified / crosses RRS threshold.
  */
@@ -94,11 +96,12 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
     }
 
     const uniqueTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
+    const safetyAction = getRecommendedAction(conditionType);
     const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
       to: token,
       sound: 'default',
       title: `⚠️ Travel with Caution • ${conditionType} Advisory`,
-      body: `Verified ${conditionType.toLowerCase()} in Brgy. ${selectedBarangay}. Motorists are advised to reduce speed and travel with caution.`,
+      body: `Verified ${conditionType.toLowerCase()} in Brgy. ${selectedBarangay}: ${safetyAction}`,
       data: { reportId, screen: 'report-detail' },
       priority: 'high',
       channelId: 'default',

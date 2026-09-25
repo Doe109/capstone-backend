@@ -43,6 +43,26 @@ function calculateHaversineDistanceMeters(lat1: number, lon1: number, lat2: numb
   return R * c;
 }
 
+export function getRecommendedAction(conditionType?: string | null): string {
+  const normalized = (conditionType || '').toLowerCase().trim();
+  if (normalized === 'pothole') {
+    return 'Slow down and watch for the hole ahead. Avoid swerving suddenly into the opposite lane. Motorcycles and bicycles should pass around it with care.';
+  }
+  if (normalized === 'road crack') {
+    return 'Proceed with care. Motorcycles and bicycles should avoid riding along the crack line, where tires can catch.';
+  }
+  if (normalized === 'damaged pavement') {
+    return 'Slow down and expect broken or loose surface material. Keep a safe distance from the vehicle ahead and avoid hard braking.';
+  }
+  if (normalized === 'surface deterioration') {
+    return 'Reduce speed. The surface may be rough or slippery, especially when wet, so allow extra braking distance.';
+  }
+  if (normalized === 'uneven road surface') {
+    return 'Reduce speed to keep control over the uneven section. Motorcycles and bicycles should hold steady and avoid sudden movements.';
+  }
+  return 'Proceed with caution, reduce speed, and observe road conditions carefully.';
+}
+
 // ── POST /api/reports ───────────────────────────────────────────────
 
 router.post(
@@ -322,12 +342,13 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
       const isJimenez = jimenezList.some((b) => b.toLowerCase() === (report.selectedBarangay || '').toLowerCase().trim());
       const lguName = isJimenez ? 'Jimenez' : 'Ozamiz City';
 
+      const safetyAction = getRecommendedAction(report.conditionType);
       advisoriesRepository.create({
         id: uuidv4(),
         title: `${report.conditionType} Warning`,
         location: `Brgy. ${report.selectedBarangay}, ${lguName}`,
         selectedBarangay: report.selectedBarangay,
-        message: `Validated ${report.conditionType.toLowerCase()} reported in Brgy. ${report.selectedBarangay}, ${lguName}. Motorists are advised to take caution.`,
+        message: `${safetyAction} (Validated ${report.conditionType.toLowerCase()} in Brgy. ${report.selectedBarangay}, ${lguName})`,
         issuedAt: now,
       }).catch((advErr) => console.error('[AdvisoryTrigger] Error creating advisory:', advErr));
 
