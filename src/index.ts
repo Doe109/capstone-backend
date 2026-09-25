@@ -35,20 +35,9 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Serve uploaded photos as static files with aggressive client caching and fallback
+// Serve uploaded photos as static files with aggressive client caching
 app.use(
   '/uploads',
-  (req, res, next) => {
-    const requestedFile = path.join(uploadsDir, req.path);
-    if (!fs.existsSync(requestedFile)) {
-      const fallbackFile = path.join(uploadsDir, 'pothole.jpg');
-      if (fs.existsSync(fallbackFile)) {
-        res.setHeader('Cache-Control', 'public, max-age=86400');
-        return res.sendFile(fallbackFile);
-      }
-    }
-    next();
-  },
   express.static(uploadsDir, {
     maxAge: '30d',
     immutable: true,
