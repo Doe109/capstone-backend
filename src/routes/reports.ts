@@ -11,7 +11,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as reportsRepository from '../repositories/reportsRepository';
 import * as votesRepository from '../repositories/votesRepository';
 import * as advisoriesRepository from '../repositories/advisoriesRepository';
-import { authenticate } from '../middleware/auth';
+import { authenticate, optionalAuthenticate } from '../middleware/auth';
 import { upload } from '../middleware/upload';
 import { ReportStatus, VoteType } from '../types/report';
 import { sendNewReportNotification, sendRoadAdvisoryNotification } from '../services/pushNotificationService';
@@ -196,7 +196,7 @@ router.get('/', authenticate, async (req: Request, res: Response): Promise<void>
 
 // ── GET /api/reports/:id ────────────────────────────────────────────
 
-router.get('/:id', authenticate, async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+router.get('/:id', optionalAuthenticate, async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   try {
     const rawId = req.params.id;
     const reportId = decodeURIComponent(rawId || '').trim();
