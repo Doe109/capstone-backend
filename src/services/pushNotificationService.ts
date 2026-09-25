@@ -183,7 +183,7 @@ export async function sendRepairResolvedNotification(params: {
       to: token,
       sound: 'default',
       title: `🎉 Kumpirmado! Na-ayo Na ang Dalan`,
-      body: `Ang gitaho nga ${conditionType} sa Brgy. ${selectedBarangay} kumpirmado na sa komunidad nga na-ayo na. Luwas na kining agian sa tanan!`,
+      body: `Ang gi-report nga ${conditionType} sa Brgy. ${selectedBarangay} kumpirmado na sa komunidad nga na-ayo na. Luwas na kining agian sa tanan!`,
       data: { reportId, screen: 'report-detail', type: 'resolved' },
       priority: 'high',
       channelId: 'default',
