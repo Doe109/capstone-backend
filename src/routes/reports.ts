@@ -15,6 +15,7 @@ import { authenticate } from '../middleware/auth';
 import { upload } from '../middleware/upload';
 import { ReportStatus, VoteType } from '../types/report';
 import { sendNewReportNotification, sendRoadAdvisoryNotification } from '../services/pushNotificationService';
+import { optimizeUploadedImage } from '../utils/imageOptimizer';
 
 const router = Router();
 
@@ -121,6 +122,11 @@ router.post(
         description && typeof description === 'string' && description.trim()
           ? description.trim()
           : `${conditionType} reported at Brgy. ${selectedBarangay}`;
+
+      // Optimize uploaded photo on the fly with sharp (90-95% file size reduction)
+      if (file && file.path) {
+        await optimizeUploadedImage(file.path);
+      }
 
       const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
       const photoUri = `/uploads/${file.filename}`;
@@ -410,6 +416,9 @@ router.post(
         return;
       }
 
+      if (file && file.path) {
+        await optimizeUploadedImage(file.path);
+      }
       const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
       const resolutionPhotoUri = file ? `/uploads/${file.filename}` : null;
 

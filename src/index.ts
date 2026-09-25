@@ -9,6 +9,7 @@ dotenv.config();
 
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import path from 'path';
 import fs from 'fs';
 
@@ -17,6 +18,7 @@ import authRoutes from './routes/auth';
 import reportsRoutes from './routes/reports';
 import advisoriesRoutes from './routes/advisories';
 import usersRoutes from './routes/users';
+import { optimizeUploadedImage } from './utils/imageOptimizer';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -28,9 +30,10 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 // ── Global middleware ───────────────────────────────────────────────
+app.use(compression()); // Gzip compression for all JSON / API payloads
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Serve uploaded photos as static files with aggressive client caching
 app.use(
@@ -40,6 +43,9 @@ app.use(
     immutable: true,
     etag: true,
     lastModified: true,
+    setHeaders: (res) => {
+      res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+    },
   })
 );
 
@@ -59,6 +65,27 @@ app.use('/api/reports', reportsRoutes);
 app.use('/api/advisories', advisoriesRoutes);
 app.use('/api/users', usersRoutes);
 
+// Background auto-optimization sweep for any legacy uncompressed uploads
+function sweepUploadsInBackground() {
+  setTimeout(async () => {
+    try {
+      if (!fs.existsSync(uploadsDir)) return;
+      const files = fs.readdirSync(uploadsDir);
+      for (const file of files) {
+        const filePath = path.join(uploadsDir, file);
+        const stat = fs.statSync(filePath);
+        // If file is larger than 300KB, optimize it
+        if (stat.isFile() && stat.size > 300 * 1024) {
+          await optimizeUploadedImage(filePath);
+        }
+      }
+      console.log('✅ Background upload image optimization sweep completed.');
+    } catch (err: any) {
+      console.warn('Notice during background image sweep:', err?.message || err);
+    }
+  }, 3000);
+}
+
 // ── Start server ────────────────────────────────────────────────────
 async function start() {
   // Test DB connectivity before accepting requests
@@ -66,6 +93,7 @@ async function start() {
     await testConnection();
     console.log('✅ MySQL connection verified (SELECT 1 succeeded)');
     await ensureSchemaUpToDate();
+    sweepUploadsInBackground();
   } catch (error) {
     console.error('❌ MySQL connection FAILED:', error);
     console.error('   Check your .env DB_HOST / DB_USER / DB_PASSWORD / DB_NAME values.');
@@ -81,3 +109,4 @@ async function start() {
 start();
 
 export default app;
+
