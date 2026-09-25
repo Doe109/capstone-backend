@@ -232,14 +232,18 @@ export async function submitRepairProof(
   const pool = getPool();
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
   // Clear any old repair votes for fresh review
-  await pool.query(`DELETE FROM repair_votes WHERE reportId = ?`, [reportId]);
+  try {
+    await pool.query(`DELETE FROM repair_votes WHERE reportId = ?`, [reportId]);
 
-  // Insert submitter's implicit positive vote
-  const { v4: uuidv4 } = await import('uuid');
-  await pool.query(
-    `INSERT INTO repair_votes (id, reportId, citizenId, voteType, votedAt) VALUES (?, ?, ?, 'agree', ?)`,
-    [uuidv4(), reportId, resolvedByCitizenId, now]
-  );
+    // Insert submitter's implicit positive vote
+    const { v4: uuidv4 } = await import('uuid');
+    await pool.query(
+      `INSERT INTO repair_votes (id, reportId, citizenId, voteType, votedAt) VALUES (?, ?, ?, 'agree', ?)`,
+      [uuidv4(), reportId, resolvedByCitizenId, now]
+    );
+  } catch (rvErr) {
+    console.warn('[submitRepairProof] Notice updating repair_votes:', rvErr);
+  }
 
   await pool.query<ResultSetHeader>(
     `UPDATE reports 
@@ -294,13 +298,18 @@ export async function getUserRepairVote(
   reportId: string,
   citizenId: string
 ): Promise<VoteType | null> {
-  const pool = getPool();
-  const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT voteType FROM repair_votes WHERE reportId = ? AND citizenId = ? LIMIT 1`,
-    [reportId, citizenId]
-  );
-  if (rows.length === 0) return null;
-  return rows[0].voteType as VoteType;
+  try {
+    const pool = getPool();
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT voteType FROM repair_votes WHERE reportId = ? AND citizenId = ? LIMIT 1`,
+      [reportId, citizenId]
+    );
+    if (!rows || rows.length === 0) return null;
+    return rows[0].voteType as VoteType;
+  } catch (err) {
+    console.warn('[reportsRepository.getUserRepairVote] Notice querying repair_votes:', err);
+    return null;
+  }
 }
 
 /**
@@ -309,7 +318,11 @@ export async function getUserRepairVote(
 export async function revertRepairToVerified(reportId: string): Promise<RoadReport | null> {
   const pool = getPool();
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
-  await pool.query(`DELETE FROM repair_votes WHERE reportId = ?`, [reportId]);
+  try {
+    await pool.query(`DELETE FROM repair_votes WHERE reportId = ?`, [reportId]);
+  } catch (e) {
+    console.warn('[revertRepairToVerified] Notice deleting repair_votes:', e);
+  }
   await pool.query<ResultSetHeader>(
     `UPDATE reports 
      SET reportStatus = 'Verified', 

@@ -85,13 +85,13 @@ export async function ensureSchemaUpToDate(): Promise<void> {
     // 5. Create repair_votes table if missing
     await db.query(`
       CREATE TABLE IF NOT EXISTS repair_votes (
-        id VARCHAR(36) PRIMARY KEY,
-        reportId VARCHAR(36) NOT NULL,
-        citizenId VARCHAR(36) NOT NULL,
+        id VARCHAR(100) PRIMARY KEY,
+        reportId VARCHAR(100) NOT NULL,
+        citizenId VARCHAR(100) NOT NULL,
         voteType ENUM('agree', 'disagree') NOT NULL,
         votedAt DATETIME NOT NULL,
-        FOREIGN KEY (reportId) REFERENCES reports(id) ON DELETE CASCADE,
-        FOREIGN KEY (citizenId) REFERENCES users(id),
+        INDEX idx_rep_report (reportId),
+        INDEX idx_rep_citizen (citizenId),
         UNIQUE KEY unique_repair_vote (reportId, citizenId)
       ) ENGINE=InnoDB
     `);
