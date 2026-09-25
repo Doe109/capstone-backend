@@ -53,6 +53,8 @@ function rowToReport(row: RowDataPacket): RoadReport {
     resolvedAt: row.resolvedAt ? formatIsoTimestamp(row.resolvedAt) : null,
     resolutionPhotoUri: row.resolutionPhotoUri ?? null,
     resolvedByCitizenId: row.resolvedByCitizenId ?? null,
+    repairAgreeCount: Number(row.repairAgreeCount ?? 0),
+    repairDisagreeCount: Number(row.repairDisagreeCount ?? 0),
   };
 }
 
@@ -217,6 +219,109 @@ export async function updateReportScores(
   );
 
   return findReportById(reportId, true);
+}
+
+/**
+ * Submit repair evidence: marks report as 'Under Review' and stores resolution photo.
+ */
+export async function submitRepairProof(
+  reportId: string,
+  resolutionPhotoUri: string,
+  resolvedByCitizenId: string
+): Promise<RoadReport | null> {
+  const pool = getPool();
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  // Clear any old repair votes for fresh review
+  await pool.query(`DELETE FROM repair_votes WHERE reportId = ?`, [reportId]);
+
+  // Insert submitter's implicit positive vote
+  const { v4: uuidv4 } = await import('uuid');
+  await pool.query(
+    `INSERT INTO repair_votes (id, reportId, citizenId, voteType, votedAt) VALUES (?, ?, ?, 'agree', ?)`,
+    [uuidv4(), reportId, resolvedByCitizenId, now]
+  );
+
+  await pool.query<ResultSetHeader>(
+    `UPDATE reports 
+     SET reportStatus = 'Under Review', 
+         resolutionPhotoUri = ?, 
+         resolvedByCitizenId = ?, 
+         repairAgreeCount = 1, 
+         repairDisagreeCount = 0, 
+         updatedAt = ? 
+     WHERE id = ?`,
+    [resolutionPhotoUri, resolvedByCitizenId, now, reportId]
+  );
+  return findReportById(reportId);
+}
+
+/**
+ * Record a citizen's vote on repair verification ('agree' for Fixed, 'disagree' for Still Damaged).
+ */
+export async function voteOnRepair(
+  reportId: string,
+  citizenId: string,
+  voteType: VoteType
+): Promise<{ success: boolean; error?: string }> {
+  const pool = getPool();
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const { v4: uuidv4 } = await import('uuid');
+
+  try {
+    await pool.query(
+      `INSERT INTO repair_votes (id, reportId, citizenId, voteType, votedAt) VALUES (?, ?, ?, ?, ?)`,
+      [uuidv4(), reportId, citizenId, voteType, now]
+    );
+
+    const col = voteType === 'agree' ? 'repairAgreeCount' : 'repairDisagreeCount';
+    await pool.query<ResultSetHeader>(
+      `UPDATE reports SET ${col} = ${col} + 1, updatedAt = ? WHERE id = ?`,
+      [now, reportId]
+    );
+    return { success: true };
+  } catch (err: any) {
+    if (err.code === 'ER_DUP_ENTRY') {
+      return { success: false, error: 'You have already voted on this repair verification.' };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Get citizen's vote on repair verification if any.
+ */
+export async function getUserRepairVote(
+  reportId: string,
+  citizenId: string
+): Promise<VoteType | null> {
+  const pool = getPool();
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT voteType FROM repair_votes WHERE reportId = ? AND citizenId = ? LIMIT 1`,
+    [reportId, citizenId]
+  );
+  if (rows.length === 0) return null;
+  return rows[0].voteType as VoteType;
+}
+
+/**
+ * Revert a repair claim back to 'Verified' (Active Hazard) when community votes 'Still Damaged'.
+ */
+export async function revertRepairToVerified(reportId: string): Promise<RoadReport | null> {
+  const pool = getPool();
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  await pool.query(`DELETE FROM repair_votes WHERE reportId = ?`, [reportId]);
+  await pool.query<ResultSetHeader>(
+    `UPDATE reports 
+     SET reportStatus = 'Verified', 
+         resolutionPhotoUri = NULL, 
+         resolvedByCitizenId = NULL, 
+         repairAgreeCount = 0, 
+         repairDisagreeCount = 0, 
+         updatedAt = ? 
+     WHERE id = ?`,
+    [now, reportId]
+  );
+  return findReportById(reportId);
 }
 
 /**

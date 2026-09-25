@@ -84,12 +84,13 @@ import { getRecommendedAction } from '../routes/reports';
 
 /**
  * Send automatic push notifications to all registered devices when a report becomes Verified / crosses RRS threshold.
+ * Excludes the reporter so they don't receive an alert for their own submission.
  */
 export async function sendRoadAdvisoryNotification(params: PushNotificationParams): Promise<void> {
-  const { reportId, conditionType, selectedBarangay } = params;
+  const { reportId, conditionType, selectedBarangay, reporterUserId } = params;
 
   try {
-    const rawTokens = await usersRepository.getAllPushTokens();
+    const rawTokens = await usersRepository.getAllPushTokens(reporterUserId);
     if (!rawTokens || rawTokens.length === 0) {
       console.log('[pushNotificationService] No push tokens registered in database to notify.');
       return;
@@ -116,6 +117,84 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
     await sendPushMessagesSafely(messages);
   } catch (err) {
     console.error('[pushNotificationService] Failed to process push notifications:', err);
+  }
+}
+
+/**
+ * Send automatic push notifications to all registered devices when a repair photo is submitted (Under Review).
+ * Excludes the submitter so they don't receive an alert for their own submission.
+ */
+export async function sendRepairUnderReviewNotification(params: {
+  reportId: string;
+  conditionType: string;
+  selectedBarangay: string;
+  submitterUserId?: string;
+}): Promise<void> {
+  const { reportId, conditionType, selectedBarangay, submitterUserId } = params;
+
+  try {
+    const rawTokens = await usersRepository.getAllPushTokens(submitterUserId);
+    if (!rawTokens || rawTokens.length === 0) {
+      console.log('[pushNotificationService] No push tokens registered in database to notify for repair review.');
+      return;
+    }
+
+    const uniqueTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
+    const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
+      to: token,
+      sound: 'default',
+      title: `🔧 Gisusi ang Pagka-ayo sa Dalan: ${conditionType}`,
+      body: `Adunay bag-ong repair photo nga gi-submit sa Brgy. ${selectedBarangay}. Kung anaa ka sa duol, palihug tabangi pag-verify kung na-ayo na ba gyud kini.`,
+      data: { reportId, screen: 'report-detail', type: 'under_review' },
+      priority: 'high',
+      channelId: 'default',
+    }));
+
+    if (messages.length === 0) return;
+
+    console.log(`[pushNotificationService] Sending ${messages.length} repair review push notification(s)...`);
+    await sendPushMessagesSafely(messages);
+  } catch (err) {
+    console.error('[pushNotificationService] Failed to process repair review push notifications:', err);
+  }
+}
+
+/**
+ * Send automatic push notifications when community votes confirm that a road condition has been fixed (Resolved).
+ * Excludes the voter / submitter so only other users receive the broadcast.
+ */
+export async function sendRepairResolvedNotification(params: {
+  reportId: string;
+  conditionType: string;
+  selectedBarangay: string;
+  excludeUserId?: string;
+}): Promise<void> {
+  const { reportId, conditionType, selectedBarangay, excludeUserId } = params;
+
+  try {
+    const rawTokens = await usersRepository.getAllPushTokens(excludeUserId);
+    if (!rawTokens || rawTokens.length === 0) {
+      console.log('[pushNotificationService] No push tokens registered in database to notify for resolved repair.');
+      return;
+    }
+
+    const uniqueTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
+    const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
+      to: token,
+      sound: 'default',
+      title: `🎉 Kumpirmado! Na-ayo Na ang Dalan`,
+      body: `Ang gitaho nga ${conditionType} sa Brgy. ${selectedBarangay} kumpirmado na sa komunidad nga na-ayo na. Luwas na kining agian sa tanan!`,
+      data: { reportId, screen: 'report-detail', type: 'resolved' },
+      priority: 'high',
+      channelId: 'default',
+    }));
+
+    if (messages.length === 0) return;
+
+    console.log(`[pushNotificationService] Sending ${messages.length} repair resolved push notification(s)...`);
+    await sendPushMessagesSafely(messages);
+  } catch (err) {
+    console.error('[pushNotificationService] Failed to process repair resolved push notifications:', err);
   }
 }
 

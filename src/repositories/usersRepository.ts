@@ -126,9 +126,22 @@ export async function getAllPushTokens(excludeUserId?: string): Promise<string[]
   }
   const [rows] = await pool.query<RowDataPacket[]>(query, params);
   const tokenSet = new Set<string>();
+
+  // If excludeUserId is provided, fetch the user's specific pushToken to guarantee device exclusion
+  let excludedToken: string | null = null;
+  if (excludeUserId) {
+    const excludedUser = await findUserById(excludeUserId);
+    if (excludedUser?.pushToken) {
+      excludedToken = excludedUser.pushToken.trim();
+    }
+  }
+
   for (const r of rows) {
     if (r.pushToken && typeof r.pushToken === 'string' && r.pushToken.trim()) {
-      tokenSet.add(r.pushToken.trim());
+      const trimmed = r.pushToken.trim();
+      if (!excludedToken || trimmed !== excludedToken) {
+        tokenSet.add(trimmed);
+      }
     }
   }
   return Array.from(tokenSet);

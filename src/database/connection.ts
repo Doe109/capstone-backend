@@ -45,7 +45,14 @@ export async function ensureSchemaUpToDate(): Promise<void> {
   const db = getPool();
   const dbName = process.env.DB_NAME || 'road_condition_dss';
   try {
-    // Add resolutionPhotoUri if missing
+    // 1. Modify reportStatus to VARCHAR(50) so it cleanly supports 'Under Review' alongside standard statuses
+    try {
+      await db.query(`ALTER TABLE reports MODIFY COLUMN reportStatus VARCHAR(50) NOT NULL DEFAULT 'Pending Validation'`);
+    } catch (statusErr) {
+      console.warn('Notice modifying reportStatus column:', statusErr);
+    }
+
+    // 2. Add resolutionPhotoUri if missing
     const [resCols] = (await db.query(
       `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'reports' AND COLUMN_NAME = 'resolutionPhotoUri'`,
       [dbName]
@@ -55,7 +62,7 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       console.log('✅ Added missing resolutionPhotoUri column to reports table');
     }
 
-    // Add resolvedByCitizenId if missing
+    // 3. Add resolvedByCitizenId if missing
     const [citCols] = (await db.query(
       `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'reports' AND COLUMN_NAME = 'resolvedByCitizenId'`,
       [dbName]
@@ -65,7 +72,31 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       console.log('✅ Added missing resolvedByCitizenId column to reports table');
     }
 
-    // Add pushToken if missing in users
+    // 4. Add repairAgreeCount and repairDisagreeCount if missing
+    const [repairCols] = (await db.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'reports' AND COLUMN_NAME = 'repairAgreeCount'`,
+      [dbName]
+    )) as any;
+    if (repairCols.length === 0) {
+      await db.query(`ALTER TABLE reports ADD COLUMN repairAgreeCount INT DEFAULT 0, ADD COLUMN repairDisagreeCount INT DEFAULT 0`);
+      console.log('✅ Added missing repairAgreeCount & repairDisagreeCount columns to reports table');
+    }
+
+    // 5. Create repair_votes table if missing
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS repair_votes (
+        id VARCHAR(36) PRIMARY KEY,
+        reportId VARCHAR(36) NOT NULL,
+        citizenId VARCHAR(36) NOT NULL,
+        voteType ENUM('agree', 'disagree') NOT NULL,
+        votedAt DATETIME NOT NULL,
+        FOREIGN KEY (reportId) REFERENCES reports(id) ON DELETE CASCADE,
+        FOREIGN KEY (citizenId) REFERENCES users(id),
+        UNIQUE KEY unique_repair_vote (reportId, citizenId)
+      ) ENGINE=InnoDB
+    `);
+
+    // 6. Add pushToken if missing in users
     const [tokenCols] = (await db.query(
       `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'users' AND COLUMN_NAME = 'pushToken'`,
       [dbName]

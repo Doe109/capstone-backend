@@ -13,6 +13,7 @@ export type RoadConditionType =
 export type ReportStatus =
   | 'Pending Validation'
   | 'Verified'
+  | 'Under Review'
   | 'Resolved'
   | 'Disputed';
 
@@ -51,6 +52,11 @@ export interface RoadReport {
   // Aliases for the RN app's newer naming
   confirmCount: number;
   disputeCount: number;
+
+  // Repair Verification Fields
+  repairAgreeCount?: number;
+  repairDisagreeCount?: number;
+  userRepairVote?: VoteType | null;
 
   // Backend-specific DSS scores
   locationValidationScore: number;

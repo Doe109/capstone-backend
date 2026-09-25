@@ -14,7 +14,12 @@ import * as advisoriesRepository from '../repositories/advisoriesRepository';
 import { authenticate, optionalAuthenticate } from '../middleware/auth';
 import { upload } from '../middleware/upload';
 import { ReportStatus, VoteType } from '../types/report';
-import { sendNewReportNotification, sendRoadAdvisoryNotification } from '../services/pushNotificationService';
+import {
+  sendNewReportNotification,
+  sendRoadAdvisoryNotification,
+  sendRepairUnderReviewNotification,
+  sendRepairResolvedNotification,
+} from '../services/pushNotificationService';
 import { optimizeUploadedImage } from '../utils/imageOptimizer';
 
 const router = Router();
@@ -206,7 +211,8 @@ router.get('/:id', optionalAuthenticate, async (req: Request<{ id: string }>, re
       return;
     }
     const userVote = req.user ? await votesRepository.getUserVote(reportId, req.user.userId) : null;
-    res.json({ success: true, report, userVote });
+    const userRepairVote = req.user ? await reportsRepository.getUserRepairVote(reportId, req.user.userId) : null;
+    res.json({ success: true, report, userVote, userRepairVote });
   } catch (error) {
     console.error('Get report error:', error);
     res.status(500).json({ success: false, error: 'Internal server error.' });
@@ -358,11 +364,12 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
         issuedAt: now,
       }).catch((advErr) => console.error('[AdvisoryTrigger] Error creating advisory:', advErr));
 
-      // Trigger automatic push notification alert to all registered devices
+      // Trigger automatic push notification alert to all registered devices (excluding original reporter)
       sendRoadAdvisoryNotification({
         reportId: report.id,
         conditionType: report.conditionType,
         selectedBarangay: report.selectedBarangay,
+        reporterUserId: report.citizenId,
       }).catch((pushErr) => console.error('[PushNotification] Error sending push advisory:', pushErr));
     } else if (shouldDispute && report.reportStatus === 'Pending Validation') {
       newStatus = 'Disputed';
@@ -394,9 +401,7 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
 });
 
 // ── POST /api/reports/:id/resolution ───────────────────────────────
-// Community Resolution / Status Update -> Has Road Condition Been Fixed?
-// YES -> Mark as Resolved Road Condition (reportStatus = 'Resolved', resolvedAt = NOW(), save resolution photo, deactivate advisory)
-// NO  -> Keep Advisory Active (reportStatus remains 'Verified', advisory stays active)
+// Citizen submits repair evidence photo -> Transitions status to 'Under Review'
 router.post(
   '/:id/resolution',
   authenticate,
@@ -407,8 +412,7 @@ router.post(
       const reportId = decodeURIComponent(rawId || '').trim();
       const user = req.user!;
       const file = req.file;
-      const rawIsFixed = req.body.isFixed;
-      const isFixed = rawIsFixed === true || rawIsFixed === 'true' || rawIsFixed === 1 || rawIsFixed === '1';
+      const { voterLatitude, voterLongitude } = req.body;
 
       const report = await reportsRepository.findReportById(reportId);
       if (!report) {
@@ -416,42 +420,154 @@ router.post(
         return;
       }
 
-      if (file && file.path) {
+      // Enforce 30m Proximity Gate for repair photo capture
+      const targetLat = report.reportLatitude || report.capturedLatitude;
+      const targetLng = report.reportLongitude || report.capturedLongitude;
+      const numLat = typeof voterLatitude === 'string' ? parseFloat(voterLatitude) : voterLatitude;
+      const numLng = typeof voterLongitude === 'string' ? parseFloat(voterLongitude) : voterLongitude;
+
+      if (typeof numLat === 'number' && !isNaN(numLat) && typeof numLng === 'number' && !isNaN(numLng) && targetLat && targetLng) {
+        const distanceMeters = calculateHaversineDistanceMeters(numLat, numLng, targetLat, targetLng);
+        if (distanceMeters > 30) {
+          res.status(403).json({
+            success: false,
+            error: `Capturing repair evidence is only permitted within 30 meters of the road condition (you are currently ${Math.round(distanceMeters)}m away).`,
+          });
+          return;
+        }
+      }
+
+      if (!file) {
+        res.status(400).json({ success: false, error: 'Resolution photo is required.' });
+        return;
+      }
+
+      if (file.path) {
         await optimizeUploadedImage(file.path);
       }
-      const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
-      const resolutionPhotoUri = file ? `/uploads/${file.filename}` : null;
+      const resolutionPhotoUri = `/uploads/${file.filename}`;
 
-      if (isFixed) {
-        // "Has Road Condition Been Fixed?" -> YES
-        // 1. Mark report as Resolved with resolution photo & verifier ID
-        const resolvedReport = await reportsRepository.resolveReport(reportId, resolutionPhotoUri, user.userId);
+      // Mark report as 'Under Review' and store submitter's repair proof
+      const updatedReport = await reportsRepository.submitRepairProof(reportId, resolutionPhotoUri, user.userId);
 
-        // 2. Deactivate active advisory for this road section
-        await advisoriesRepository.deactivateByBarangay(report.selectedBarangay);
+      // Trigger automatic push notification alert to all barangay citizens for review
+      sendRepairUnderReviewNotification({
+        reportId: report.id,
+        conditionType: report.conditionType,
+        selectedBarangay: report.selectedBarangay,
+        submitterUserId: user.userId,
+      }).catch((pushErr) => console.error('[PushNotification] Error sending repair review push:', pushErr));
 
-        res.status(200).json({
-          success: true,
-          isFixed: true,
-          reportStatus: 'Resolved',
-          resolvedAt: now,
-          resolutionPhotoUri: resolvedReport?.resolutionPhotoUri || resolutionPhotoUri,
-          message: 'Road condition marked as Resolved with verification photo. Advisory deactivated.',
-          report: resolvedReport,
-        });
-      } else {
-        // "Has Road Condition Been Fixed?" -> NO
-        // Keep Advisory Active
-        res.status(200).json({
-          success: true,
-          isFixed: false,
-          reportStatus: report.reportStatus,
-          message: 'Road condition still active. Advisory remains active on GIS Map.',
-          report,
-        });
-      }
+      res.status(200).json({
+        success: true,
+        isFixed: true,
+        reportStatus: 'Under Review',
+        message: 'Repair evidence submitted. Report is now Under Review for community verification.',
+        report: updatedReport,
+        userRepairVote: 'agree',
+      });
     } catch (error) {
       console.error('Resolution error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error.' });
+    }
+  }
+);
+
+// ── POST /api/reports/:id/resolution/vote ───────────────────────────
+// Community Repair Validation Vote (Na-ayo Na / Fixed vs Guba Pa Gihapon / Still Damaged)
+router.post(
+  '/:id/resolution/vote',
+  authenticate,
+  async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    try {
+      const user = req.user!;
+      const rawId = req.params.id;
+      const reportId = decodeURIComponent(rawId || '').trim();
+      const { voteType, voterLatitude, voterLongitude } = req.body as {
+        voteType: VoteType;
+        voterLatitude?: number;
+        voterLongitude?: number;
+      };
+
+      if (!voteType || !['agree', 'disagree'].includes(voteType)) {
+        res.status(400).json({ success: false, error: 'voteType must be "agree" or "disagree".' });
+        return;
+      }
+
+      const report = await reportsRepository.findReportById(reportId);
+      if (!report) {
+        res.status(404).json({ success: false, error: 'Report not found.' });
+        return;
+      }
+
+      if (report.reportStatus !== 'Under Review') {
+        res.status(400).json({
+          success: false,
+          error: `Repair verification voting is only allowed for reports with 'Under Review' status (current status: ${report.reportStatus}).`,
+        });
+        return;
+      }
+
+      // 30m Proximity Gate
+      const targetLat = report.reportLatitude || report.capturedLatitude;
+      const targetLng = report.reportLongitude || report.capturedLongitude;
+      if (typeof voterLatitude === 'number' && typeof voterLongitude === 'number' && targetLat && targetLng) {
+        const distanceMeters = calculateHaversineDistanceMeters(voterLatitude, voterLongitude, targetLat, targetLng);
+        if (distanceMeters > 30) {
+          res.status(403).json({
+            success: false,
+            error: `Repair verification is only permitted within 30 meters of the road condition (you are currently ${Math.round(distanceMeters)}m away).`,
+          });
+          return;
+        }
+      }
+
+      const voteResult = await reportsRepository.voteOnRepair(reportId, user.userId, voteType);
+      if (!voteResult.success) {
+        res.status(409).json({ success: false, error: voteResult.error });
+        return;
+      }
+
+      // Fetch fresh counts
+      const freshReport = await reportsRepository.findReportById(reportId);
+      const repairAgree = freshReport?.repairAgreeCount ?? 0;
+      const repairDisagree = freshReport?.repairDisagreeCount ?? 0;
+
+      const isTestingOverride = process.env.TESTING_SINGLE_VOTE_VERIFY === 'true';
+      const shouldResolve = isTestingOverride ? repairAgree >= 1 : repairAgree >= 2;
+      const shouldRevertToVerified = isTestingOverride ? repairDisagree >= 1 : repairDisagree >= 2;
+
+      let finalReport = freshReport;
+
+      if (shouldResolve) {
+        // Mark as Resolved & Deactivate Advisory & Send Push Notification
+        finalReport = await reportsRepository.resolveReport(reportId, freshReport?.resolutionPhotoUri, freshReport?.resolvedByCitizenId);
+        await advisoriesRepository.deactivateByBarangay(report.selectedBarangay);
+
+        sendRepairResolvedNotification({
+          reportId: report.id,
+          conditionType: report.conditionType,
+          selectedBarangay: report.selectedBarangay,
+          excludeUserId: user.userId,
+        }).catch((pushErr) => console.error('[PushNotification] Error sending repair resolved push:', pushErr));
+
+        console.log(`[RepairResolution] ✅ Report ${reportId} officially marked as Resolved by community vote consensus.`);
+      } else if (shouldRevertToVerified) {
+        // Community rejected repair claim -> Revert to Verified (Active Hazard), clear invalid photo, NO push notification
+        finalReport = await reportsRepository.revertRepairToVerified(reportId);
+        console.log(`[RepairResolution] ⚠️ Report ${reportId} reverted back to Verified (Active Hazard) by community vote consensus.`);
+      }
+
+      res.status(200).json({
+        success: true,
+        userRepairVote: voteType,
+        repairAgreeCount: finalReport?.repairAgreeCount ?? repairAgree,
+        repairDisagreeCount: finalReport?.repairDisagreeCount ?? repairDisagree,
+        reportStatus: finalReport?.reportStatus,
+        report: finalReport,
+      });
+    } catch (error) {
+      console.error('Repair vote error:', error);
       res.status(500).json({ success: false, error: 'Internal server error.' });
     }
   }
