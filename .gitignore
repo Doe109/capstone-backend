@@ -7,9 +7,6 @@ dist/
 # Environment variables (never commit secrets)
 .env
 
-# Uploaded files
-uploads/
-
 # OS files
 .DS_Store
 Thumbs.db
