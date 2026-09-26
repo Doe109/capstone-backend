@@ -245,8 +245,11 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
       return;
     }
 
-    // Prevent author from voting on own report
-    if (report.citizenId === user.userId) {
+    const isSimulated = req.body.isSimulatedPeerVote === true;
+    const voterCitizenId = isSimulated ? uuidv4() : user.userId;
+
+    // Prevent author from voting on own report (unless in simulated test mode)
+    if (report.citizenId === user.userId && !isSimulated) {
       res.status(403).json({
         success: false,
         error: 'As the author of this report, you cannot submit a community validation vote on your own submission.',
@@ -254,15 +257,17 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
       return;
     }
 
-    // Prevent double voting
-    const existingVote = await votesRepository.getUserVote(reportId, user.userId);
-    if (existingVote) {
-      res.status(409).json({
-        success: false,
-        error: `You have already submitted a validation vote (${existingVote === 'agree' ? 'Confirmed' : 'Disputed'}) on this road hazard.`,
-        userVote: existingVote,
-      });
-      return;
+    // Prevent double voting (unless in simulated test mode)
+    if (!isSimulated) {
+      const existingVote = await votesRepository.getUserVote(reportId, user.userId);
+      if (existingVote) {
+        res.status(409).json({
+          success: false,
+          error: `You have already submitted a validation vote (${existingVote === 'agree' ? 'Confirmed' : 'Disputed'}) on this road hazard.`,
+          userVote: existingVote,
+        });
+        return;
+      }
     }
 
     // Enforce 100m Proximity Voting Gate if voter coordinates are supplied
@@ -291,7 +296,7 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
     const voteResult = await votesRepository.createVote({
       id: uuidv4(),
       reportId,
-      citizenId: user.userId,
+      citizenId: voterCitizenId,
       voteType,
       votedAt: now,
     });
@@ -314,16 +319,16 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
     const isWithin30m = distanceMeters !== null ? distanceMeters <= 30 : report.locationAccuracyMeters <= 20;
     const locationValidationScore = isWithin30m ? 1.0 : 0.0;
 
-    // Road Reliability Score: RRS = 0.60 * CV + 0.40 * LVS
+    // Road Reliability Score (Manuscript Formula): RRS = 0.60 * LVS + 0.40 * CV (60% Location, 40% Community)
     const reportReliabilityScore = parseFloat(
-      ((0.6 * communityValidationScore) + (0.4 * locationValidationScore)).toFixed(3)
+      ((0.60 * locationValidationScore) + (0.40 * communityValidationScore)).toFixed(3)
     );
 
     const isTestingOverride = process.env.TESTING_SINGLE_VOTE_VERIFY === 'true';
-    // Production verification requires minimum 3 independent validators and RRS >= 0.70
+    // Production verification requires minimum 3 independent validators, agreeCount > disagreeCount, and RRS >= 0.70
     const shouldVerify = isTestingOverride
       ? agreeCount >= 1 // DEMO/TESTING OVERRIDE ONLY
-      : total >= 3 && reportReliabilityScore >= 0.70;
+      : total >= 3 && agreeCount > disagreeCount && reportReliabilityScore >= 0.70;
 
     const wasNotVerified = report.reportStatus !== 'Verified';
 
@@ -344,16 +349,48 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
         );
       }
 
-      // Auto-generate GIS Advisory entry
-      const jimenezList = [
-        'Adorable', 'Butuay', 'Carmen', 'Corrales', 'Dicoloc', 'Gata', 'Guintomoyan',
-        'Macabayao', 'Malibacsan', 'Matugas Alto', 'Matugas Bajo', 'Mialem',
-        'Nacional (Poblacion)', 'Naga (Poblacion)', 'Palilan', 'Rizal (Poblacion)',
-        'San Isidro', 'Santa Cruz (Poblacion)', 'Seti', 'Sibaroc', 'Sinara Alto',
-        'Sinara Bajo', 'Tabo-o', 'Taraka (Poblacion)',
-      ];
-      const isJimenez = jimenezList.some((b) => b.toLowerCase() === (report.selectedBarangay || '').toLowerCase().trim());
-      const lguName = isJimenez ? 'Jimenez' : 'Ozamiz City';
+      // Auto-generate GIS Advisory entry across all 17 LGUs
+      const lguMap: Record<string, string[]> = {
+        'Jimenez': [
+          'adorable', 'butuay', 'carmen', 'corrales', 'dicoloc', 'gata', 'guintomoyan',
+          'macabayao', 'malibacsan', 'matugas alto', 'matugas bajo', 'mialem',
+          'nacional', 'naga', 'palilan', 'rizal', 'san isidro', 'santa cruz', 'seti',
+          'sibaroc', 'sinara alto', 'sinara bajo', 'tabo-o', 'taraka'
+        ],
+        'Oroquieta City': [
+          'apil', 'binuangan', 'bolibol', 'buenavista', 'bunga', 'canubay', 'clarin settlement',
+          'dolipos', 'dulapo', 'dullan', 'langcangan', 'lamac', 'loboc', 'mobod', 'paypayan',
+          'pines', 'poblacion 1', 'poblacion 2', 'proper langcangan', 'senote', 'taboc', 'talairon', 'tipan', 'toliyok', 'victoria', 'villaflor'
+        ],
+        'Tangub City': [
+          'aquino', 'balatacan', 'baloc', 'banglay', 'bintana', 'bocator', 'bongabong', 'caniangan', 'capalaran', 'catagan', 'garang', 'guinabot', 'hoyohoy', 'kauswagan', 'kimat', 'labuyo', 'maloro', 'manga', 'matugnao', 'minsubong', 'prenza', 'salimpuno', 'sumirap', 'taguite', 'titunod', 'tiaman', 'tugas'
+        ],
+        'Clarin': ['bernad', 'bito-on', 'cabog', 'canibungan', 'dalicob', 'dolores', 'guba', 'guimbatao', 'kinangay', 'lapasan', 'lupagan', 'masabud', 'segatic', 'sebasi', 'tinaclaan'],
+        'Tudela': ['balon', 'barra', 'basiric', 'biga', 'cahayag', 'camating', 'centro hulpa', 'colambutan', 'duero', 'gumbil', 'locso-on', 'maikay', 'maribojoc', 'mitugas', 'nailon', 'namut', 'pan-ay', 'silongon', 'taguima', 'tigdok', 'yahoy'],
+        'Sinacaban': ['cagay-anon', 'camanse', 'colupan', 'dinas', 'estrella', 'katipunan', 'libertad', 'san lorenzo', 'señor', 'sinonoc', 'villaba'],
+        'Panaon': ['baha', 'bangko', 'camanucan', 'dela paz', 'lutao', 'magsaysay', 'mapurog', 'mohon', 'punta', 'salimpuno', 'villalba'],
+        'Aloran': ['balintonga', 'banisilon', 'burgos', 'calube', 'caputol', 'casus-an', 'conat', 'dalisay', 'ditoro', 'himaya', 'hinacoban', 'lobogon', 'lumbayao', 'makawa', 'manamong', 'matipaz', 'maular', 'mitazan', 'monterico', 'nabuna', 'palayan', 'pelong', 'roxas', 'sinampongan', 'taguanao', 'tuburan', 'zamora'],
+        'Plaridel': ['agalayan', 'agunod', 'bato', 'buena voluntad', 'calaca-an', 'cartagena', 'catarman', 'cebulin', 'deboloc', 'divisoria', 'ilisan', 'lao', 'looc', 'mamunga', 'mangidkid', 'panalsalan', 'puntod', 'quirino', 'tipolo', 'unidos', 'usocan'],
+        'Calamba': ['bonifacio', 'bunawan', 'calaran', 'dapacan', 'langub', 'liboron', 'magcamuing', 'mamalad', 'mauswagon', 'salvador', 'siloy', 'singalat', 'solinog', 'sulipat'],
+        'Baliangao': ['del monte', 'landing', 'lumipac', 'lusot', 'mabini', 'mampanao', 'misom', 'mituro', 'punta miray', 'punta sulona', 'sianib', 'sina-ad'],
+        'Sapang Dalaga': ['agapito yap', 'bautista', 'bitibut', 'boundary', 'caluya', 'capundag', 'casul', 'dasa', 'dioyo', 'disacan', 'el paraiso', 'locus', 'macabao', 'manla', 'masubong', 'medallo', 'sixto velez'],
+        'Bonifacio': ['anonang', 'bagumbayan', 'baybay', 'bolinsong', 'buracan', 'calumbit', 'dimalco', 'dullan', 'liconan', 'lodiong', 'usogan', 'migpange', 'montol', 'pisa-an', 'remedios', 'rufino lumapas', 'sibucao', 'tingcob', 'tusik'],
+        'Don Victoriano': ['bagong clarin', 'gandawan', 'lake duminagat', 'lalud', 'lampasan', 'mansawan', 'nueva vista', 'petianan', 'tuno', 'mara-mara'],
+        'Concepcion': ['bagong nayon', 'capule', 'guiban', 'laya-an', 'lingatongan', 'maligubaan', 'mantukoy', 'marugang', 'pogan', 'small potongan', 'soso-on', 'virayan', 'new casul'],
+      };
+
+      const normBrgy = (report.selectedBarangay || '').toLowerCase().trim();
+      let lguName = 'Misamis Occidental';
+
+      for (const [lgu, brgys] of Object.entries(lguMap)) {
+        if (brgys.some((b) => normBrgy.includes(b))) {
+          lguName = lgu;
+          break;
+        }
+      }
+      if (lguName === 'Misamis Occidental') {
+        lguName = 'Ozamiz City';
+      }
 
       const safetyAction = getRecommendedAction(report.conditionType);
       advisoriesRepository.create({
@@ -429,10 +466,10 @@ router.post(
 
       if (typeof numLat === 'number' && !isNaN(numLat) && typeof numLng === 'number' && !isNaN(numLng) && targetLat && targetLng) {
         const distanceMeters = calculateHaversineDistanceMeters(numLat, numLng, targetLat, targetLng);
-        if (distanceMeters > 30) {
+        if (distanceMeters > 100) {
           res.status(403).json({
             success: false,
-            error: `Capturing repair evidence is only permitted within 30 meters of the road condition (you are currently ${Math.round(distanceMeters)}m away).`,
+            error: `Capturing repair evidence is only permitted within 100 meters of the road condition (you are currently ${Math.round(distanceMeters)}m away).`,
           });
           return;
         }
@@ -465,7 +502,7 @@ router.post(
         reportStatus: 'Under Review',
         message: 'Repair evidence submitted. Report is now Under Review for community verification.',
         report: updatedReport,
-        userRepairVote: 'agree',
+        userRepairVote: null,
       });
     } catch (error) {
       console.error('Resolution error:', error);
@@ -509,21 +546,33 @@ router.post(
         return;
       }
 
-      // 30m Proximity Gate
+      const isSimulated = (req.body as any).isSimulatedPeerVote === true;
+      const voterCitizenId = isSimulated ? uuidv4() : user.userId;
+
+      // Check if user is the submitter of the repair evidence (unless in simulated test mode)
+      if (report.resolvedByCitizenId === user.userId && !isSimulated) {
+        res.status(403).json({
+          success: false,
+          error: 'The person who submitted the repair photo cannot vote on their own repair verification.',
+        });
+        return;
+      }
+
+      // 100m Proximity Gate for Voting
       const targetLat = report.reportLatitude || report.capturedLatitude;
       const targetLng = report.reportLongitude || report.capturedLongitude;
       if (typeof voterLatitude === 'number' && typeof voterLongitude === 'number' && targetLat && targetLng) {
         const distanceMeters = calculateHaversineDistanceMeters(voterLatitude, voterLongitude, targetLat, targetLng);
-        if (distanceMeters > 30) {
+        if (distanceMeters > 100) {
           res.status(403).json({
             success: false,
-            error: `Repair verification is only permitted within 30 meters of the road condition (you are currently ${Math.round(distanceMeters)}m away).`,
+            error: `Repair verification voting is only permitted within 100 meters of the road condition (you are currently ${Math.round(distanceMeters)}m away).`,
           });
           return;
         }
       }
 
-      const voteResult = await reportsRepository.voteOnRepair(reportId, user.userId, voteType);
+      const voteResult = await reportsRepository.voteOnRepair(reportId, voterCitizenId, voteType);
       if (!voteResult.success) {
         res.status(409).json({ success: false, error: voteResult.error });
         return;
@@ -535,7 +584,8 @@ router.post(
       const repairDisagree = freshReport?.repairDisagreeCount ?? 0;
 
       const isTestingOverride = process.env.TESTING_SINGLE_VOTE_VERIFY === 'true';
-      const shouldResolve = isTestingOverride ? repairAgree >= 1 : repairAgree >= 2;
+      // 3 independent peer votes required to officially mark as Resolved
+      const shouldResolve = isTestingOverride ? repairAgree >= 1 : repairAgree >= 3;
       const shouldRevertToVerified = isTestingOverride ? repairDisagree >= 1 : repairDisagree >= 2;
 
       let finalReport = freshReport;
@@ -587,4 +637,99 @@ router.post(
   }
 );
 
+// ── POST /api/reports/:id/fast-forward-7days ─────────────────────────
+// Fast-forwards report createdAt by 8 days and evaluates 7-day validation decay
+router.post(
+  '/:id/fast-forward-7days',
+  optionalAuthenticate,
+  async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    try {
+      const rawId = req.params.id;
+      const reportId = decodeURIComponent(rawId || '').trim();
+      const updated = await reportsRepository.fastForwardReportDays(reportId, 8);
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Report not found.' });
+        return;
+      }
+      res.status(200).json({
+        success: true,
+        message: 'Report timestamp fast-forwarded by 8 days. 7-day decay evaluation completed.',
+        report: updated,
+      });
+    } catch (error) {
+      console.error('Fast-forward 7 days error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error.' });
+    }
+  }
+);
+
+// ── PUT /api/reports/:id/test-edit ────────────────────────────────────
+// Allows editing report details, replacing photo evidence, and resetting/overriding vote counts for empirical tests
+router.put(
+  '/:id/test-edit',
+  optionalAuthenticate,
+  upload.fields([
+    { name: 'photo', maxCount: 1 },
+    { name: 'resolutionPhoto', maxCount: 1 },
+  ]),
+  async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    try {
+      const rawId = req.params.id;
+      const reportId = decodeURIComponent(rawId || '').trim();
+      const updates = { ...req.body };
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+
+      if (files?.['photo']?.[0]?.path) {
+        await optimizeUploadedImage(files['photo'][0].path);
+        updates.photoUri = `/uploads/${files['photo'][0].filename}`;
+      }
+      if (files?.['resolutionPhoto']?.[0]?.path) {
+        await optimizeUploadedImage(files['resolutionPhoto'][0].path);
+        updates.resolutionPhotoUri = `/uploads/${files['resolutionPhoto'][0].filename}`;
+      }
+
+      const updated = await reportsRepository.testEditReport(reportId, updates);
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Report not found.' });
+        return;
+      }
+      res.status(200).json({
+        success: true,
+        message: 'Report test modifications saved successfully.',
+        report: updated,
+      });
+    } catch (error) {
+      console.error('Test edit report error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error.' });
+    }
+  }
+);
+
+// ── DELETE /api/reports/:id ───────────────────────────────────────────
+// Allows permanently deleting a report (tester / admin action)
+router.delete(
+  '/:id',
+  optionalAuthenticate,
+  async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    try {
+      const rawId = req.params.id;
+      const reportId = decodeURIComponent(rawId || '').trim();
+      const deleted = await reportsRepository.deleteReport(reportId);
+      if (!deleted) {
+        res.status(404).json({ success: false, error: 'Report not found or already deleted.' });
+        return;
+      }
+      res.status(200).json({
+        success: true,
+        message: 'Report and associated records deleted permanently.',
+        deletedId: reportId,
+      });
+    } catch (error) {
+      console.error('Delete report error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error.' });
+    }
+  }
+);
+
 export default router;
+

@@ -7,6 +7,7 @@
 import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { getPool } from '../database/connection';
 import { ReportStatus, RoadReport, VoteType } from '../types/report';
+import * as advisoriesRepository from './advisoriesRepository';
 
 function formatIsoTimestamp(val: any): string {
   if (!val) return val;
@@ -111,11 +112,50 @@ export async function createReport(report: {
 }
 
 /**
+ * 7-Day Window Evaluation:
+ * At the end of the 7-day validation window, unverified 'Pending Validation' reports:
+ * - Become 'Disputed' if they reached 3 votes and disagreeCount >= agreeCount
+ * - Become 'Closed' (Expired) if they failed to achieve verification quorum/score within 7 days
+ */
+export async function evaluateExpiredPendingReports(): Promise<void> {
+  const pool = getPool();
+  try {
+    const [expiredRows] = await pool.query<RowDataPacket[]>(
+      `SELECT selectedBarangay FROM reports 
+       WHERE reportStatus = 'Pending Validation' 
+         AND createdAt < DATE_SUB(NOW(), INTERVAL 7 DAY)`
+    );
+
+    await pool.query(
+      `UPDATE reports 
+       SET reportStatus = CASE 
+           WHEN (communityAgreeCount + communityDisagreeCount) >= 3 AND communityDisagreeCount >= communityAgreeCount THEN 'Disputed'
+           ELSE 'Closed'
+       END,
+       updatedAt = NOW()
+       WHERE reportStatus = 'Pending Validation' 
+         AND createdAt < DATE_SUB(NOW(), INTERVAL 7 DAY)`
+    );
+
+    if (expiredRows && expiredRows.length > 0) {
+      for (const row of expiredRows) {
+        if (row.selectedBarangay) {
+          await advisoriesRepository.deactivateByBarangay(row.selectedBarangay).catch(() => {});
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[evaluateExpiredPendingReports] Notice evaluating 7-day window:', err);
+  }
+}
+
+/**
  * Find a report by ID.
  * Disputed reports are immediately excluded and disappear totally from public queries.
  */
-export async function findReportById(id: string, includeDisputed: boolean = false): Promise<RoadReport | null> {
+export async function findReportById(id: string, includeDisputed: boolean = true): Promise<RoadReport | null> {
   const pool = getPool();
+  await evaluateExpiredPendingReports();
   const cleanId = (id || '').trim();
   const disputedClause = includeDisputed ? '' : "AND reportStatus != 'Disputed'";
   const [rows] = await pool.query<RowDataPacket[]>(
@@ -130,15 +170,13 @@ export async function findReportById(id: string, includeDisputed: boolean = fals
 
 /**
  * List reports with optional filtering by status, barangay, or citizenId.
- * Disputed reports are immediately excluded and disappear totally.
  */
 export async function listReports(filters?: ReportFilters): Promise<RoadReport[]> {
   const pool = getPool();
+  await evaluateExpiredPendingReports();
   let sql = 'SELECT * FROM reports';
   const params: unknown[] = [];
-  const clauses: string[] = [
-    "reportStatus != 'Disputed'",
-  ];
+  const clauses: string[] = [];
 
   if (filters?.status) {
     clauses.push('reportStatus = ?');
@@ -234,23 +272,18 @@ export async function submitRepairProof(
   // Clear any old repair votes for fresh review
   try {
     await pool.query(`DELETE FROM repair_votes WHERE reportId = ?`, [reportId]);
-
-    // Insert submitter's implicit positive vote
-    const { v4: uuidv4 } = await import('uuid');
-    await pool.query(
-      `INSERT INTO repair_votes (id, reportId, citizenId, voteType, votedAt) VALUES (?, ?, ?, 'agree', ?)`,
-      [uuidv4(), reportId, resolvedByCitizenId, now]
-    );
   } catch (rvErr) {
-    console.warn('[submitRepairProof] Notice updating repair_votes:', rvErr);
+    console.warn('[submitRepairProof] Notice clearing old repair_votes:', rvErr);
   }
 
+  // The person who takes the repair photo does NOT count as a "fixed" vote.
+  // We initialize repairAgreeCount to 0. 3 independent community peers must verify and vote.
   await pool.query<ResultSetHeader>(
     `UPDATE reports 
      SET reportStatus = 'Under Review', 
          resolutionPhotoUri = ?, 
          resolvedByCitizenId = ?, 
-         repairAgreeCount = 1, 
+         repairAgreeCount = 0, 
          repairDisagreeCount = 0, 
          updatedAt = ? 
      WHERE id = ?`,
@@ -272,6 +305,18 @@ export async function voteOnRepair(
   const { v4: uuidv4 } = await import('uuid');
 
   try {
+    // Block submitter from voting on their own repair evidence
+    const [reportRows] = await pool.query<RowDataPacket[]>(
+      'SELECT resolvedByCitizenId FROM reports WHERE id = ?',
+      [reportId]
+    );
+    if (reportRows && reportRows.length > 0 && reportRows[0].resolvedByCitizenId === citizenId) {
+      return {
+        success: false,
+        error: 'The person who submitted the repair photo cannot vote on their own repair verification.',
+      };
+    }
+
     await pool.query(
       `INSERT INTO repair_votes (id, reportId, citizenId, voteType, votedAt) VALUES (?, ?, ?, ?, ?)`,
       [uuidv4(), reportId, citizenId, voteType, now]
@@ -353,3 +398,134 @@ export async function resolveReport(
   );
   return findReportById(reportId);
 }
+
+
+/**
+ * Fast forward a report's createdAt timestamp by X days (for research testing of 7-day validation window expiration).
+ */
+export async function fastForwardReportDays(reportId: string, daysAgo: number = 8): Promise<RoadReport | null> {
+  const pool = getPool();
+  await pool.query<ResultSetHeader>(
+    `UPDATE reports SET createdAt = DATE_SUB(NOW(), INTERVAL ? DAY) WHERE id = ?`,
+    [daysAgo, reportId]
+  );
+  // Trigger expiration evaluation
+  await evaluateExpiredPendingReports();
+  return findReportById(reportId);
+}
+
+/**
+ * Edit report properties and optionally reset/override vote counts for empirical testing.
+ */
+export async function testEditReport(
+  reportId: string,
+  updates: {
+    conditionType?: string;
+    description?: string;
+    photoUri?: string;
+    resolutionPhotoUri?: string;
+    communityAgreeCount?: number;
+    communityDisagreeCount?: number;
+    repairAgreeCount?: number;
+    repairDisagreeCount?: number;
+    reportStatus?: ReportStatus;
+    reportLatitude?: number;
+    reportLongitude?: number;
+    capturedLatitude?: number;
+    capturedLongitude?: number;
+    selectedBarangay?: string;
+  }
+): Promise<RoadReport | null> {
+  const pool = getPool();
+  const report = await findReportById(reportId);
+  if (!report) return null;
+
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const agree = updates.communityAgreeCount ?? report.communityAgreeCount;
+  const disagree = updates.communityDisagreeCount ?? report.communityDisagreeCount;
+  const total = agree + disagree;
+  const communityValidationScore = parseFloat(((agree + 1) / (total + 2)).toFixed(3));
+  const locationValidationScore = report.locationValidationScore;
+  const reportReliabilityScore = parseFloat(
+    ((0.60 * locationValidationScore) + (0.40 * communityValidationScore)).toFixed(3)
+  );
+
+  const lat = updates.reportLatitude ?? updates.capturedLatitude ?? null;
+  const lng = updates.reportLongitude ?? updates.capturedLongitude ?? null;
+
+  await pool.query<ResultSetHeader>(
+    `UPDATE reports 
+     SET conditionType = COALESCE(?, conditionType),
+         description = COALESCE(?, description),
+         photoUri = COALESCE(?, photoUri),
+         resolutionPhotoUri = COALESCE(?, resolutionPhotoUri),
+         capturedLatitude = COALESCE(?, capturedLatitude),
+         capturedLongitude = COALESCE(?, capturedLongitude),
+         reportLatitude = COALESCE(?, reportLatitude),
+         reportLongitude = COALESCE(?, reportLongitude),
+         selectedBarangay = COALESCE(?, selectedBarangay),
+         communityAgreeCount = ?,
+         communityDisagreeCount = ?,
+         communityValidationScore = ?,
+         reportReliabilityScore = ?,
+         repairAgreeCount = COALESCE(?, repairAgreeCount),
+         repairDisagreeCount = COALESCE(?, repairDisagreeCount),
+         reportStatus = COALESCE(?, reportStatus),
+         updatedAt = ?
+     WHERE id = ?`,
+    [
+      updates.conditionType ?? null,
+      updates.description ?? null,
+      updates.photoUri ?? null,
+      updates.resolutionPhotoUri ?? null,
+      lat,
+      lng,
+      lat,
+      lng,
+      updates.selectedBarangay ?? null,
+      agree,
+      disagree,
+      communityValidationScore,
+      reportReliabilityScore,
+      updates.repairAgreeCount ?? null,
+      updates.repairDisagreeCount ?? null,
+      updates.reportStatus ?? null,
+      now,
+      reportId,
+    ]
+  );
+
+  if (updates.reportStatus === 'Disputed' || updates.reportStatus === 'Closed' || updates.reportStatus === 'Resolved') {
+    if (report.selectedBarangay) {
+      await advisoriesRepository.deactivateByBarangay(report.selectedBarangay).catch(() => {});
+    }
+  }
+
+  return findReportById(reportId);
+}
+
+export async function deleteReport(reportId: string): Promise<boolean> {
+  const pool = getPool();
+  const report = await findReportById(reportId);
+
+  try {
+    await pool.query(`DELETE FROM repair_votes WHERE reportId = ?`, [reportId]);
+  } catch (err) {
+    console.warn('[deleteReport] Notice deleting repair_votes:', err);
+  }
+
+  try {
+    await pool.query(`DELETE FROM community_votes WHERE reportId = ?`, [reportId]);
+  } catch (err) {
+    console.warn('[deleteReport] Notice deleting community_votes:', err);
+  }
+
+  const [result] = await pool.query<ResultSetHeader>(`DELETE FROM reports WHERE id = ?`, [reportId]);
+
+  if (report?.selectedBarangay) {
+    await advisoriesRepository.deactivateByBarangay(report.selectedBarangay).catch(() => {});
+  }
+
+  return result.affectedRows > 0;
+}
+

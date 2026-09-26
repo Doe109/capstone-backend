@@ -105,6 +105,27 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       await db.query(`ALTER TABLE users ADD COLUMN pushToken VARCHAR(255) NULL`);
       console.log('✅ Added missing pushToken column to users table');
     }
+
+    // 7. Ensure default tester account exists (tester@roadwatch.ph / password123)
+    try {
+      const [existingTester] = (await db.query(
+        'SELECT id FROM users WHERE email = ?',
+        ['tester@roadwatch.ph']
+      )) as any;
+      if (existingTester.length === 0) {
+        // Hash for password123
+        const bcrypt = require('bcrypt');
+        const hash = await bcrypt.hash('password123', 10);
+        await db.query(
+          `INSERT INTO users (id, email, passwordHash, fullName, firstName, lastName, createdAt)
+           VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+          ['usr_tester_roadwatch', 'tester@roadwatch.ph', hash, 'Research Tester', 'Research', 'Tester']
+        );
+        console.log('✅ Seeded default research tester account: tester@roadwatch.ph / password123');
+      }
+    } catch (testerSeedErr) {
+      console.warn('Notice seeding tester user:', testerSeedErr);
+    }
   } catch (migErr) {
     console.warn('Notice during schema migration check:', migErr);
   }

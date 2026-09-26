@@ -15,7 +15,8 @@ export type ReportStatus =
   | 'Verified'
   | 'Under Review'
   | 'Resolved'
-  | 'Disputed';
+  | 'Disputed'
+  | 'Closed';
 
 export type SyncStatus = 'synced';
 
