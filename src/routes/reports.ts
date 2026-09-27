@@ -108,7 +108,13 @@ router.post(
       // Duplicate Prevention Check: Search active reports of same condition within 30 meters
       const allActiveReports = await reportsRepository.listReports();
       const existingDuplicate = allActiveReports.find((r) => {
-        if (r.reportStatus === 'Resolved') return false;
+        if (
+          r.reportStatus === 'Resolved' ||
+          r.reportStatus === 'Disputed' ||
+          r.reportStatus === 'Closed'
+        ) {
+          return false;
+        }
         if (r.conditionType.toLowerCase().trim() !== conditionType.toLowerCase().trim()) return false;
         const dist = calculateHaversineDistanceMeters(targetLat, targetLng, r.reportLatitude, r.reportLongitude);
         return dist <= 30;
@@ -327,14 +333,14 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
     const isTestingOverride = process.env.TESTING_SINGLE_VOTE_VERIFY === 'true';
     // Production verification requires minimum 3 independent validators, agreeCount > disagreeCount, and RRS >= 0.70
     const shouldVerify = isTestingOverride
-      ? agreeCount >= 1 // DEMO/TESTING OVERRIDE ONLY
+      ? agreeCount >= 1 && agreeCount > disagreeCount // DEMO/TESTING OVERRIDE ONLY
       : total >= 3 && agreeCount > disagreeCount && reportReliabilityScore >= 0.70;
 
     const wasNotVerified = report.reportStatus !== 'Verified';
 
     let newStatus: any = undefined;
 
-    const shouldDispute = !isTestingOverride && total >= 3 && disagreeCount > agreeCount && communityValidationScore < 0.50;
+    const shouldDispute = (isTestingOverride ? disagreeCount >= 1 && disagreeCount >= agreeCount : total >= 3 && disagreeCount >= agreeCount);
 
     if (shouldVerify && wasNotVerified) {
       newStatus = 'Verified';
@@ -409,7 +415,7 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
         selectedBarangay: report.selectedBarangay,
         reporterUserId: report.citizenId,
       }).catch((pushErr) => console.error('[PushNotification] Error sending push advisory:', pushErr));
-    } else if (shouldDispute && report.reportStatus === 'Pending Validation') {
+    } else if (shouldDispute && report.reportStatus !== 'Disputed') {
       newStatus = 'Disputed';
       console.log(
         `[DisputeTrigger] DISPUTE THRESHOLD MET: Total votes (${total}) with ${disagreeCount} disputes marked report ${reportId} as Disputed.`
