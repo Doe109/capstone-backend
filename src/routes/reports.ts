@@ -53,19 +53,19 @@ function calculateHaversineDistanceMeters(lat1: number, lon1: number, lat2: numb
 export function getRecommendedAction(conditionType?: string | null): string {
   const normalized = (conditionType || '').toLowerCase().trim();
   if (normalized === 'pothole') {
-    return 'Slow down and watch for the hole ahead. Avoid swerving suddenly into the opposite lane. Motorcycles and bicycles should pass around it with care.';
+    return 'Slow down and go around the hole if it is safe to do so, without swerving suddenly into the path of oncoming vehicles. Keep a safe distance from the vehicle ahead so the hole can be seen early. Motorcycles that must pass over it should slow down as much as possible and keep the motorcycle straight.';
   }
-  if (normalized === 'road crack') {
-    return 'Proceed with care. Motorcycles and bicycles should avoid riding along the crack line, where tires can catch.';
+  if (normalized === 'road crack' || normalized === 'crack') {
+    return 'Proceed with care and do not drive fast over the cracked section. Motorcycles should not ride along a crack that runs in the same direction as the lane, and should cross it at an angle instead.';
   }
   if (normalized === 'damaged pavement') {
-    return 'Slow down and expect broken or loose surface material. Keep a safe distance from the vehicle ahead and avoid hard braking.';
+    return 'Slow down and expect broken pavement and loose gravel or sand. Keep a following distance of at least two to three seconds, and avoid sudden braking or quick turns, which can cause skidding.';
   }
   if (normalized === 'surface deterioration') {
-    return 'Reduce speed. The surface may be rough or slippery, especially when wet, so allow extra braking distance.';
+    return 'Reduce speed. The surface may become slippery when wet, so allow extra braking distance and avoid hard braking or sharp turns. Motorcycles should use both brakes gently.';
   }
-  if (normalized === 'uneven road surface') {
-    return 'Reduce speed to keep control over the uneven section. Motorcycles and bicycles should hold steady and avoid sudden movements.';
+  if (normalized === 'uneven road surface' || normalized === 'uneven road') {
+    return 'Reduce speed and drive carefully over the uneven section, keeping the vehicle on a straight course.';
   }
   return 'Proceed with caution, reduce speed, and observe road conditions carefully.';
 }
