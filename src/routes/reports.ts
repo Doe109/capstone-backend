@@ -15,6 +15,13 @@ import { authenticate, optionalAuthenticate } from '../middleware/auth';
 import { upload } from '../middleware/upload';
 import { ReportStatus, VoteType } from '../types/report';
 import {
+  VALIDATION_RULES,
+  computeLVS,
+  computeCV,
+  computeRRS,
+  evaluateVerificationStatus,
+} from '../config/validationRules';
+import {
   sendNewReportNotification,
   sendRoadAdvisoryNotification,
   sendRepairUnderReviewNotification,
@@ -110,7 +117,6 @@ router.post(
       const existingDuplicate = allActiveReports.find((r) => {
         if (
           r.reportStatus === 'Resolved' ||
-          r.reportStatus === 'Disputed' ||
           r.reportStatus === 'Closed'
         ) {
           return false;
@@ -121,10 +127,15 @@ router.post(
       });
 
       if (existingDuplicate) {
+        const isVerified = existingDuplicate.reportStatus === 'Verified' || existingDuplicate.reportStatus === 'Under Review';
+        const errorMsg = isVerified
+          ? `A ${conditionType} hazard is already active and verified in this exact area (${existingDuplicate.selectedBarangay}).`
+          : `A ${conditionType} hazard is currently pending validation in this exact area (${existingDuplicate.selectedBarangay}). Please vote on the existing report to validate it for the community.`;
+
         res.status(409).json({
           success: false,
           isDuplicate: true,
-          error: `A ${conditionType} hazard is already active in this exact area (${existingDuplicate.selectedBarangay}). Please vote on the existing report to validate it for the community.`,
+          error: errorMsg,
           existingReport: existingDuplicate,
         });
         return;
@@ -251,6 +262,12 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
       return;
     }
 
+    // Lock Voting: reject new votes if report is already Verified, Closed, or Resolved
+    if (report.reportStatus === 'Verified' || report.reportStatus === 'Closed' || report.reportStatus === 'Resolved') {
+      res.status(400).json({ success: false, error: 'Voting is closed for this report.' });
+      return;
+    }
+
     const isSimulated = req.body.isSimulatedPeerVote === true;
     const voterCitizenId = isSimulated ? uuidv4() : user.userId;
 
@@ -288,16 +305,16 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
       targetLng
     ) {
       distanceMeters = calculateHaversineDistanceMeters(voterLatitude, voterLongitude, targetLat, targetLng);
-      if (distanceMeters > 100) {
+      if (distanceMeters > VALIDATION_RULES.VOTE_RADIUS_M) {
         res.status(403).json({
           success: false,
-          error: `Voting is only permitted within 100 meters of the reported road condition (you are currently ${Math.round(distanceMeters)}m away).`,
+          error: `Voting is only permitted within ${VALIDATION_RULES.VOTE_RADIUS_M} meters of the reported road condition (you are currently ${Math.round(distanceMeters)}m away).`,
         });
         return;
       }
     }
 
-    // Insert vote (catches duplicate-key cleanly)
+    // Insert vote with distanceMeters (catches duplicate-key cleanly)
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
     const voteResult = await votesRepository.createVote({
       id: uuidv4(),
@@ -305,6 +322,7 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
       citizenId: voterCitizenId,
       voteType,
       votedAt: now,
+      distanceMeters,
     });
 
     if (!voteResult.success) {
@@ -315,45 +333,35 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
     // Increment the count on the report row
     await reportsRepository.incrementVoteCount(reportId, voteType);
 
-    // Recompute communityValidationScore (CV) using Laplace Smoothing: (agreeCount + 1) / (total + 2)
-    const { agreeCount, disagreeCount } = await votesRepository.getVoteCounts(reportId);
+    // Recompute scores using new validation rules:
+    // - LVS is based only on votes cast within 30m (onsiteAgree vs onsiteDisagree)
+    // - CV uses Laplace Smoothing across all accepted votes (agree + 1) / (total + 2)
+    // - RRS = 0.60 * LVS + 0.40 * CV
+    const { agreeCount, disagreeCount, onsiteAgreeCount, onsiteDisagreeCount } =
+      await votesRepository.getVoteCounts(reportId);
     const total = agreeCount + disagreeCount;
-    const communityValidationScore = parseFloat(((agreeCount + 1) / (total + 2)).toFixed(3));
 
-    // Dual-Radii Location Verification Score (LVS):
-    // If vote was cast on-site within 30m -> LVS = 1.0; else (30m - 100m) -> LVS = 0.0 (or default capture accuracy score if no voter coords)
-    const isWithin30m = distanceMeters !== null ? distanceMeters <= 30 : report.locationAccuracyMeters <= 20;
-    const locationValidationScore = isWithin30m ? 1.0 : 0.0;
+    const {
+      lvs: locationValidationScore,
+      cv: communityValidationScore,
+      rrs: reportReliabilityScore,
+      shouldVerify,
+    } = evaluateVerificationStatus({
+      total,
+      agreeCount,
+      disagreeCount,
+      onsiteAgreeCount,
+      onsiteDisagreeCount,
+    });
 
-    // Road Reliability Score (Manuscript Formula): RRS = 0.60 * LVS + 0.40 * CV (60% Location, 40% Community)
-    const reportReliabilityScore = parseFloat(
-      ((0.60 * locationValidationScore) + (0.40 * communityValidationScore)).toFixed(3)
-    );
+    let newStatus: ReportStatus | undefined = undefined;
 
-    const isTestingOverride = process.env.TESTING_SINGLE_VOTE_VERIFY === 'true';
-    // Production verification requires minimum 3 independent validators, agreeCount > disagreeCount, and RRS >= 0.70
-    const shouldVerify = isTestingOverride
-      ? agreeCount >= 1 && agreeCount > disagreeCount // DEMO/TESTING OVERRIDE ONLY
-      : total >= 3 && agreeCount > disagreeCount && reportReliabilityScore >= 0.70;
-
-    const wasNotVerified = report.reportStatus !== 'Verified';
-
-    let newStatus: any = undefined;
-
-    const shouldDispute = (isTestingOverride ? disagreeCount >= 1 && disagreeCount >= agreeCount : total >= 3 && disagreeCount >= agreeCount);
-
-    if (shouldVerify && wasNotVerified) {
+    if (shouldVerify) {
       newStatus = 'Verified';
 
-      if (isTestingOverride) {
-        console.log(
-          `[AdvisoryTrigger] TEMPORARY OVERRIDE TRIGGERED: 1 agree vote (agreeCount=${agreeCount}) marked report ${reportId} as Verified.`
-        );
-      } else {
-        console.log(
-          `[AdvisoryTrigger] MANUSCRIPT RRS THRESHOLD MET: Total votes (${total}) >= 3 and RRS (${reportReliabilityScore}) >= 0.70 marked report ${reportId} as Verified.`
-        );
-      }
+      console.log(
+        `[AdvisoryTrigger] VERIFICATION THRESHOLD MET: Total votes (${total}) >= 5, LVS=1, agree (${agreeCount}) > disagree (${disagreeCount}), RRS (${reportReliabilityScore}) >= 0.70 marked report ${reportId} as Verified.`
+      );
 
       // Auto-generate GIS Advisory entry across all 17 LGUs
       const lguMap: Record<string, string[]> = {
@@ -415,11 +423,6 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
         selectedBarangay: report.selectedBarangay,
         reporterUserId: report.citizenId,
       }).catch((pushErr) => console.error('[PushNotification] Error sending push advisory:', pushErr));
-    } else if (shouldDispute && report.reportStatus !== 'Disputed') {
-      newStatus = 'Disputed';
-      console.log(
-        `[DisputeTrigger] DISPUTE THRESHOLD MET: Total votes (${total}) with ${disagreeCount} disputes marked report ${reportId} as Disputed.`
-      );
     }
 
     // Update score and status on the report row
@@ -435,6 +438,8 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
       agreeCount,
       disagreeCount,
       communityValidationScore,
+      locationValidationScore,
+      reportReliabilityScore,
       userVote: voteType,
       report: updatedReport,
     });
@@ -588,11 +593,12 @@ router.post(
       const freshReport = await reportsRepository.findReportById(reportId);
       const repairAgree = freshReport?.repairAgreeCount ?? 0;
       const repairDisagree = freshReport?.repairDisagreeCount ?? 0;
+      const totalRepairVotes = repairAgree + repairDisagree;
 
-      const isTestingOverride = process.env.TESTING_SINGLE_VOTE_VERIFY === 'true';
-      // 3 independent peer votes required to officially mark as Resolved
-      const shouldResolve = isTestingOverride ? repairAgree >= 1 : repairAgree >= 3;
-      const shouldRevertToVerified = isTestingOverride ? repairDisagree >= 1 : repairDisagree >= 2;
+      // 5 independent peer votes required to evaluate resolution status
+      // (5-0 and 3-2 -> Resolved; 2-3 -> Revert to Verified)
+      const shouldResolve = totalRepairVotes >= VALIDATION_RULES.MIN_REPAIR_VOTES && repairAgree > repairDisagree;
+      const shouldRevertToVerified = totalRepairVotes >= VALIDATION_RULES.MIN_REPAIR_VOTES && repairDisagree >= repairAgree;
 
       let finalReport = freshReport;
 

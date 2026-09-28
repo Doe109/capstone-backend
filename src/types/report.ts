@@ -15,7 +15,6 @@ export type ReportStatus =
   | 'Verified'
   | 'Under Review'
   | 'Resolved'
-  | 'Disputed'
   | 'Closed';
 
 export type SyncStatus = 'synced';
@@ -76,6 +75,7 @@ export interface CommunityVote {
   citizenId: string;
   voteType: VoteType;
   votedAt: string;
+  distanceMeters?: number | null;
 }
 
 export interface RoadAdvisory {

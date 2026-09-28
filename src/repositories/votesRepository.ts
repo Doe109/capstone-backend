@@ -19,13 +19,14 @@ export async function createVote(vote: {
   citizenId: string;
   voteType: VoteType;
   votedAt: string;
+  distanceMeters?: number | null;
 }): Promise<{ success: true; vote: CommunityVote } | { success: false; error: string }> {
   const pool = getPool();
   try {
     await pool.query<ResultSetHeader>(
-      `INSERT INTO community_votes (id, reportId, citizenId, voteType, votedAt)
-       VALUES (?, ?, ?, ?, ?)`,
-      [vote.id, vote.reportId, vote.citizenId, vote.voteType, vote.votedAt],
+      `INSERT INTO community_votes (id, reportId, citizenId, voteType, votedAt, distanceMeters)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [vote.id, vote.reportId, vote.citizenId, vote.voteType, vote.votedAt, vote.distanceMeters ?? null],
     );
     return { success: true, vote };
   } catch (err: unknown) {
@@ -54,16 +55,23 @@ export async function getUserVote(
 }
 
 /**
- * Get the current agree/disagree tallies for a report.
+ * Get the current agree/disagree tallies and on-site (<= 30m) tallies for a report.
  */
 export async function getVoteCounts(
   reportId: string,
-): Promise<{ agreeCount: number; disagreeCount: number }> {
+): Promise<{
+  agreeCount: number;
+  disagreeCount: number;
+  onsiteAgreeCount: number;
+  onsiteDisagreeCount: number;
+}> {
   const pool = getPool();
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT
-       SUM(CASE WHEN voteType = 'agree'    THEN 1 ELSE 0 END) AS agreeCount,
-       SUM(CASE WHEN voteType = 'disagree' THEN 1 ELSE 0 END) AS disagreeCount
+       SUM(CASE WHEN voteType = 'agree' THEN 1 ELSE 0 END) AS agreeCount,
+       SUM(CASE WHEN voteType = 'disagree' THEN 1 ELSE 0 END) AS disagreeCount,
+       SUM(CASE WHEN voteType = 'agree' AND distanceMeters IS NOT NULL AND distanceMeters <= 30 THEN 1 ELSE 0 END) AS onsiteAgreeCount,
+       SUM(CASE WHEN voteType = 'disagree' AND distanceMeters IS NOT NULL AND distanceMeters <= 30 THEN 1 ELSE 0 END) AS onsiteDisagreeCount
      FROM community_votes
      WHERE reportId = ?`,
     [reportId],
@@ -72,5 +80,7 @@ export async function getVoteCounts(
   return {
     agreeCount: Number(row?.agreeCount ?? 0),
     disagreeCount: Number(row?.disagreeCount ?? 0),
+    onsiteAgreeCount: Number(row?.onsiteAgreeCount ?? 0),
+    onsiteDisagreeCount: Number(row?.onsiteDisagreeCount ?? 0),
   };
 }

@@ -8,6 +8,7 @@ import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { getPool } from '../database/connection';
 import { ReportStatus, RoadReport, VoteType } from '../types/report';
 import * as advisoriesRepository from './advisoriesRepository';
+import { computeCV, computeRRS } from '../config/validationRules';
 
 function formatIsoTimestamp(val: any): string {
   if (!val) return val;
@@ -114,12 +115,16 @@ export async function createReport(report: {
 /**
  * 7-Day Window Evaluation:
  * At the end of the 7-day validation window, unverified 'Pending Validation' reports:
- * - Become 'Disputed' if they reached 3 votes and disagreeCount >= agreeCount
- * - Become 'Closed' (Expired) if they failed to achieve verification quorum/score within 7 days
+ * - Become 'Closed' whatever the reason (insufficient votes, tie, disagreement, or low RRS).
+ * 
+ * For 'Under Review' repair reports:
+ * - If repairAgreeCount >= 5 and repairAgreeCount > repairDisagreeCount -> Become 'Resolved'.
+ * - Otherwise -> Revert to 'Verified' with advisory remaining active.
  */
 export async function evaluateExpiredPendingReports(): Promise<void> {
   const pool = getPool();
   try {
+    // 1. Expire unverified Pending Validation reports to Closed
     const [expiredRows] = await pool.query<RowDataPacket[]>(
       `SELECT selectedBarangay FROM reports 
        WHERE reportStatus = 'Pending Validation' 
@@ -128,11 +133,8 @@ export async function evaluateExpiredPendingReports(): Promise<void> {
 
     await pool.query(
       `UPDATE reports 
-       SET reportStatus = CASE 
-           WHEN (communityAgreeCount + communityDisagreeCount) >= 3 AND communityDisagreeCount >= communityAgreeCount THEN 'Disputed'
-           ELSE 'Closed'
-       END,
-       updatedAt = NOW()
+       SET reportStatus = 'Closed',
+           updatedAt = NOW()
        WHERE reportStatus = 'Pending Validation' 
          AND createdAt < DATE_SUB(NOW(), INTERVAL 7 DAY)`
     );
@@ -144,6 +146,35 @@ export async function evaluateExpiredPendingReports(): Promise<void> {
         }
       }
     }
+
+    // 2. Evaluate expired Under Review reports (7 days after submitted repair)
+    const [expiredRepairs] = await pool.query<RowDataPacket[]>(
+      `SELECT id, selectedBarangay, repairAgreeCount, repairDisagreeCount FROM reports
+       WHERE reportStatus = 'Under Review'
+         AND updatedAt < DATE_SUB(NOW(), INTERVAL 7 DAY)`
+    );
+
+    if (expiredRepairs && expiredRepairs.length > 0) {
+      for (const rep of expiredRepairs) {
+        const agree = Number(rep.repairAgreeCount ?? 0);
+        const disagree = Number(rep.repairDisagreeCount ?? 0);
+        if (agree >= 5 && agree > disagree) {
+          await pool.query(
+            `UPDATE reports SET reportStatus = 'Resolved', resolvedAt = NOW(), updatedAt = NOW() WHERE id = ?`,
+            [rep.id]
+          );
+          if (rep.selectedBarangay) {
+            await advisoriesRepository.deactivateByBarangay(rep.selectedBarangay).catch(() => {});
+          }
+        } else {
+          // Revert back to Verified
+          await pool.query(
+            `UPDATE reports SET reportStatus = 'Verified', resolutionPhotoUri = NULL, updatedAt = NOW() WHERE id = ?`,
+            [rep.id]
+          );
+        }
+      }
+    }
   } catch (err) {
     console.warn('[evaluateExpiredPendingReports] Notice evaluating 7-day window:', err);
   }
@@ -151,16 +182,14 @@ export async function evaluateExpiredPendingReports(): Promise<void> {
 
 /**
  * Find a report by ID.
- * Disputed reports are immediately excluded and disappear totally from public queries.
  */
-export async function findReportById(id: string, includeDisputed: boolean = true): Promise<RoadReport | null> {
+export async function findReportById(id: string): Promise<RoadReport | null> {
   const pool = getPool();
   await evaluateExpiredPendingReports();
   const cleanId = (id || '').trim();
-  const disputedClause = includeDisputed ? '' : "AND reportStatus != 'Disputed'";
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT * FROM reports 
-     WHERE (id = ? OR id = ?) ${disputedClause}
+     WHERE (id = ? OR id = ?)
      LIMIT 1`,
     [cleanId, id],
   );
@@ -256,7 +285,7 @@ export async function updateReportScores(
     [...values, reportId],
   );
 
-  return findReportById(reportId, true);
+  return findReportById(reportId);
 }
 
 /**
@@ -444,11 +473,9 @@ export async function testEditReport(
   const agree = updates.communityAgreeCount ?? report.communityAgreeCount;
   const disagree = updates.communityDisagreeCount ?? report.communityDisagreeCount;
   const total = agree + disagree;
-  const communityValidationScore = parseFloat(((agree + 1) / (total + 2)).toFixed(3));
+  const communityValidationScore = computeCV(agree, total);
   const locationValidationScore = report.locationValidationScore;
-  const reportReliabilityScore = parseFloat(
-    ((0.60 * locationValidationScore) + (0.40 * communityValidationScore)).toFixed(3)
-  );
+  const reportReliabilityScore = computeRRS(locationValidationScore, communityValidationScore);
 
   const lat = updates.reportLatitude ?? updates.capturedLatitude ?? null;
   const lng = updates.reportLongitude ?? updates.capturedLongitude ?? null;
@@ -495,7 +522,7 @@ export async function testEditReport(
     ]
   );
 
-  if (updates.reportStatus === 'Disputed' || updates.reportStatus === 'Closed' || updates.reportStatus === 'Resolved') {
+  if (updates.reportStatus === 'Closed' || updates.reportStatus === 'Resolved') {
     if (report.selectedBarangay) {
       await advisoriesRepository.deactivateByBarangay(report.selectedBarangay).catch(() => {});
     }

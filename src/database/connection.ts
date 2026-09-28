@@ -106,25 +106,56 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       console.log('✅ Added missing pushToken column to users table');
     }
 
-    // 7. Ensure default tester account exists (tester@roadwatch.ph / password123)
+    // 7. Add distanceMeters column to community_votes if missing
+    const [voteDistCols] = (await db.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'community_votes' AND COLUMN_NAME = 'distanceMeters'`,
+      [dbName]
+    )) as any;
+    if (voteDistCols.length === 0) {
+      await db.query(`ALTER TABLE community_votes ADD COLUMN distanceMeters DECIMAL(8, 2) NULL`);
+      console.log('✅ Added missing distanceMeters column to community_votes table');
+    }
+
+    // 8. Migrate any existing 'Disputed' reports to 'Closed'
     try {
-      const [existingTester] = (await db.query(
-        'SELECT id FROM users WHERE email = ?',
-        ['tester@roadwatch.ph']
+      const [disputedUpdates] = (await db.query(
+        `UPDATE reports SET reportStatus = 'Closed' WHERE reportStatus = 'Disputed'`
       )) as any;
-      if (existingTester.length === 0) {
-        // Hash for password123
-        const bcrypt = require('bcrypt');
-        const hash = await bcrypt.hash('password123', 10);
-        await db.query(
-          `INSERT INTO users (id, email, passwordHash, fullName, firstName, lastName, createdAt)
-           VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-          ['usr_tester_roadwatch', 'tester@roadwatch.ph', hash, 'Research Tester', 'Research', 'Tester']
-        );
-        console.log('✅ Seeded default research tester account: tester@roadwatch.ph / password123');
+      if (disputedUpdates?.affectedRows > 0) {
+        console.log(`✅ Migrated ${disputedUpdates.affectedRows} Disputed report(s) to Closed status`);
+      }
+    } catch (dispErr) {
+      console.warn('Notice migrating Disputed reports:', dispErr);
+    }
+
+    // 9. Ensure research testing accounts exist (reporter + 5 voters)
+    try {
+      const bcrypt = require('bcrypt');
+      const hash = await bcrypt.hash('password123', 10);
+
+      const testAccounts = [
+        { id: 'usr_tester_roadwatch', email: 'tester@roadwatch.ph', name: 'Research Tester', first: 'Research', last: 'Tester' },
+        { id: 'usr_reporter_roadwatch', email: 'reporter@roadwatch.ph', name: 'Research Reporter', first: 'Research', last: 'Reporter' },
+        { id: 'usr_voter1_roadwatch', email: 'voter1@roadwatch.ph', name: 'Research Voter 1', first: 'Voter', last: 'One' },
+        { id: 'usr_voter2_roadwatch', email: 'voter2@roadwatch.ph', name: 'Research Voter 2', first: 'Voter', last: 'Two' },
+        { id: 'usr_voter3_roadwatch', email: 'voter3@roadwatch.ph', name: 'Research Voter 3', first: 'Voter', last: 'Three' },
+        { id: 'usr_voter4_roadwatch', email: 'voter4@roadwatch.ph', name: 'Research Voter 4', first: 'Voter', last: 'Four' },
+        { id: 'usr_voter5_roadwatch', email: 'voter5@roadwatch.ph', name: 'Research Voter 5', first: 'Voter', last: 'Five' },
+      ];
+
+      for (const acc of testAccounts) {
+        const [existing] = (await db.query('SELECT id FROM users WHERE email = ?', [acc.email])) as any;
+        if (existing.length === 0) {
+          await db.query(
+            `INSERT INTO users (id, email, passwordHash, fullName, firstName, lastName, createdAt)
+             VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+            [acc.id, acc.email, hash, acc.name, acc.first, acc.last]
+          );
+          console.log(`✅ Seeded research test account: ${acc.email} / password123`);
+        }
       }
     } catch (testerSeedErr) {
-      console.warn('Notice seeding tester user:', testerSeedErr);
+      console.warn('Notice seeding tester users:', testerSeedErr);
     }
   } catch (migErr) {
     console.warn('Notice during schema migration check:', migErr);
