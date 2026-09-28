@@ -63,7 +63,7 @@ export async function sendNewReportNotification(params: PushNotificationParams):
       sound: 'default',
       title: `📢 Bag-ong Road Report: ${conditionType}`,
       body: `Adunay bag-ong report nga ${conditionType} sa Brgy. ${selectedBarangay}. I-tap aron masusi ang dalan ug lokasyon sa mapa.`,
-      data: { reportId, screen: 'report-detail' },
+      data: { reportId, screen: 'report-detail', type: 'new_report', conditionType, barangay: selectedBarangay },
       priority: 'high',
       channelId: 'default',
     }));
@@ -103,7 +103,7 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
       sound: 'default',
       title: `⚠️ Travel with Caution • ${conditionType} Advisory`,
       body: `Verified ${conditionType.toLowerCase()} in Brgy. ${selectedBarangay}: ${safetyAction}`,
-      data: { reportId, screen: 'report-detail' },
+      data: { reportId, screen: 'report-detail', type: 'advisory', conditionType, barangay: selectedBarangay },
       priority: 'high',
       channelId: 'default',
     }));
@@ -145,7 +145,7 @@ export async function sendRepairUnderReviewNotification(params: {
       sound: 'default',
       title: `🔧 Gisusi ang Pagka-ayo sa Dalan: ${conditionType}`,
       body: `Adunay bag-ong repair photo nga gi-submit sa Brgy. ${selectedBarangay}. Kung anaa ka sa duol, palihug tabangi pag-verify kung na-ayo na ba gyud kini.`,
-      data: { reportId, screen: 'report-detail', type: 'under_review' },
+      data: { reportId, screen: 'report-detail', type: 'repair_submitted', conditionType, barangay: selectedBarangay },
       priority: 'high',
       channelId: 'default',
     }));
@@ -184,7 +184,7 @@ export async function sendRepairResolvedNotification(params: {
       sound: 'default',
       title: `🎉 Kumpirmado! Na-ayo Na ang Dalan`,
       body: `Ang gi-report nga ${conditionType} sa Brgy. ${selectedBarangay} kumpirmado na sa komunidad nga na-ayo na. Luwas na kining agian sa tanan!`,
-      data: { reportId, screen: 'report-detail', type: 'resolved' },
+      data: { reportId, screen: 'report-detail', type: 'repair_resolved', conditionType, barangay: selectedBarangay },
       priority: 'high',
       channelId: 'default',
     }));
