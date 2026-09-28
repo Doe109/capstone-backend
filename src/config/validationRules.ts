@@ -74,6 +74,7 @@ export function evaluateVerificationStatus(params: {
   cv: number;
   rrs: number;
   shouldVerify: boolean;
+  shouldClose: boolean;
 } {
   const { total, agreeCount, disagreeCount, onsiteAgreeCount, onsiteDisagreeCount } = params;
   const lvs = computeLVS(onsiteAgreeCount, onsiteDisagreeCount);
@@ -88,5 +89,9 @@ export function evaluateVerificationStatus(params: {
     agreeCount > disagreeCount &&
     rrs >= VALIDATION_RULES.RRS_THRESHOLD;
 
-  return { lvs, cv, rrs, shouldVerify };
+  // Immediate dispute/rejection closure:
+  // If the report receives 5 or more dispute/disagree votes with dispute majority, immediately close without waiting 7 days
+  const shouldClose = disagreeCount >= VALIDATION_RULES.MIN_RESPONSES && disagreeCount > agreeCount;
+
+  return { lvs, cv, rrs, shouldVerify, shouldClose };
 }

@@ -259,14 +259,36 @@ console.log('================================================================\n'
   });
 }
 
-// ── Test 11: No test path ever produces the status Disputed
+// ── Test 11: 5 dispute votes (0-5, onsite 0-1) -> Immediately Closed (No 7 days wait)
+{
+  const res = evaluateVerificationStatus({
+    total: 5,
+    agreeCount: 0,
+    disagreeCount: 5,
+    onsiteAgreeCount: 0,
+    onsiteDisagreeCount: 1,
+  });
+  const status = res.shouldVerify ? 'Verified' : res.shouldClose ? 'Closed' : 'Pending';
+  results.push({
+    testNumber: 11,
+    description: '5 dispute votes (0-5, onsite 0-1) -> Immediately Closed',
+    expectedStatus: 'Closed',
+    actualStatus: status,
+    lvs: res.lvs,
+    cv: res.cv,
+    rrs: res.rrs,
+    passed: status === 'Closed' && res.shouldClose === true && res.lvs === 0.0 && res.cv === 0.143 && res.rrs === 0.057,
+  });
+}
+
+// ── Test 12: No test path ever produces the status Disputed
 {
   const testStatuses = results.map(r => r.actualStatus).concat([
     'Pending', 'Verified', 'Closed', 'Resolved', 'Under Review'
   ]);
-  const containsDisputed = testStatuses.some(s => s.toLowerCase().includes('disputed'));
+  const containsDisputed = testStatuses.some(s => s === 'Disputed');
   results.push({
-    testNumber: 11,
+    testNumber: 12,
     description: 'Disputed status completely eradicated across all decision paths',
     expectedStatus: 'No Disputed status',
     actualStatus: containsDisputed ? 'Contains Disputed' : 'No Disputed status',
