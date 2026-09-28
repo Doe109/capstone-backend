@@ -735,11 +735,7 @@ router.post(
       }
 
       // Fast-forward report age in database to 15 days ago
-      const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
-      await reportsRepository.testEditReport(reportId, {
-        createdAt: fifteenDaysAgo,
-        submittedAt: fifteenDaysAgo,
-      });
+      await reportsRepository.fastForwardReportDays(reportId, 15);
 
       // Broadcast push notification to ALL registered users via Expo Push Service
       await sendTwoWeekFollowUpReminderNotification({
