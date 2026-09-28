@@ -237,6 +237,43 @@ export async function sendSubmitterRepairCelebrationNotification(params: {
 }
 
 /**
+ * Send automatic 2-week follow-up reminder push notification to ALL registered users (Table 7 R15).
+ */
+export async function sendTwoWeekFollowUpReminderNotification(params: {
+  reportId: string;
+  conditionType: string;
+  selectedBarangay: string;
+}): Promise<void> {
+  const { reportId, conditionType, selectedBarangay } = params;
+
+  try {
+    const rawTokens = await usersRepository.getAllPushTokens();
+    if (!rawTokens || rawTokens.length === 0) {
+      console.log('[pushNotificationService] No push tokens registered in database to notify for 2-week follow-up.');
+      return;
+    }
+
+    const uniqueTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
+    const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
+      to: token,
+      sound: 'default',
+      title: '🔔 Status Check: Unrepaired Hazard Reminder',
+      body: `Ang verified nga ${conditionType} sa Brgy. ${selectedBarangay} nagpabilin nga aktibo sulod sa 2 ka semana. Palihug susiha kon na-ayo na ba kini. I-tap aron mokuha og litrato sa giayo nga dalan.`,
+      data: { reportId, screen: 'report-detail', type: 'followup', conditionType, barangay: selectedBarangay },
+      priority: 'high',
+      channelId: 'default',
+    }));
+
+    if (messages.length === 0) return;
+
+    console.log(`[pushNotificationService] Broadcasting 2-week follow-up reminder to ${messages.length} device(s)...`);
+    await sendPushMessagesSafely(messages);
+  } catch (err) {
+    console.error('[pushNotificationService] Failed to broadcast 2-week follow-up reminder:', err);
+  }
+}
+
+/**
  * Send an immediate test push notification to all registered tokens for live verification.
  */
 export async function sendTestPushNotification(): Promise<{

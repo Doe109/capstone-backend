@@ -27,6 +27,7 @@ import {
   sendRepairUnderReviewNotification,
   sendRepairResolvedNotification,
   sendSubmitterRepairCelebrationNotification,
+  sendTwoWeekFollowUpReminderNotification,
 } from '../services/pushNotificationService';
 import { optimizeUploadedImage } from '../utils/imageOptimizer';
 
@@ -713,6 +714,46 @@ router.put(
       });
     } catch (error) {
       console.error('Test edit report error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error.' });
+    }
+  }
+);
+
+// ── POST /api/reports/:id/trigger-followup ──────────────────────────
+// Broadcasts 2-week follow-up status check reminder to ALL registered users (Table 7 R15)
+router.post(
+  '/:id/trigger-followup',
+  optionalAuthenticate,
+  async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    try {
+      const rawId = req.params.id;
+      const reportId = decodeURIComponent(rawId || '').trim();
+      const report = await reportsRepository.findReportById(reportId);
+      if (!report) {
+        res.status(404).json({ success: false, error: 'Report not found.' });
+        return;
+      }
+
+      // Fast-forward report age in database to 15 days ago
+      const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+      await reportsRepository.testEditReport(reportId, {
+        createdAt: fifteenDaysAgo,
+        submittedAt: fifteenDaysAgo,
+      });
+
+      // Broadcast push notification to ALL registered users via Expo Push Service
+      await sendTwoWeekFollowUpReminderNotification({
+        reportId: report.id,
+        conditionType: report.conditionType,
+        selectedBarangay: report.selectedBarangay,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Two-week follow-up reminder broadcasted to all registered devices.',
+      });
+    } catch (error) {
+      console.error('Trigger follow-up error:', error);
       res.status(500).json({ success: false, error: 'Internal server error.' });
     }
   }
