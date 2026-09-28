@@ -259,7 +259,7 @@ console.log('================================================================\n'
   });
 }
 
-// ── Test 11: 5 dispute votes (0-5, onsite 0-1) -> Immediately Closed (No 7 days wait)
+// ── Test 11: 5 dispute votes (0-5, onsite 0-1) -> Stays Pending; Closed at day 7 window end (Table 7 R8)
 {
   const res = evaluateVerificationStatus({
     total: 5,
@@ -268,16 +268,17 @@ console.log('================================================================\n'
     onsiteAgreeCount: 0,
     onsiteDisagreeCount: 1,
   });
-  const status = res.shouldVerify ? 'Verified' : res.shouldClose ? 'Closed' : 'Pending';
+  const status = res.shouldVerify ? 'Verified' : 'Pending (Closed at day 7)';
   results.push({
     testNumber: 11,
-    description: '5 dispute votes (0-5, onsite 0-1) -> Immediately Closed',
-    expectedStatus: 'Closed',
+    description: '5 dispute votes (0-5, onsite 0-1) -> Pending; Closed at day 7',
+    expectedStatus: 'Pending (Closed at day 7)',
     actualStatus: status,
     lvs: res.lvs,
     cv: res.cv,
     rrs: res.rrs,
-    passed: status === 'Closed' && res.shouldClose === true && res.lvs === 0.0 && res.cv === 0.143 && res.rrs === 0.057,
+    passed: !res.shouldVerify && res.lvs === 0.0 && res.cv === 0.143 && res.rrs === 0.057,
+    notes: 'Per Table 7 R8: remains Pending during voting window; auto-closed at day 7.',
   });
 }
 

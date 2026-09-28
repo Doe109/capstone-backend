@@ -424,16 +424,6 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
         selectedBarangay: report.selectedBarangay,
         reporterUserId: report.citizenId,
       }).catch((pushErr) => console.error('[PushNotification] Error sending push advisory:', pushErr));
-    } else if (shouldClose) {
-      newStatus = 'Closed';
-
-      console.log(
-        `[DisputeClosure] DISPUTE THRESHOLD MET: Disagree/Dispute votes (${disagreeCount}) >= 5 (disagree > agree) marked report ${reportId} immediately as Closed without waiting for 7 days.`
-      );
-
-      if (report.selectedBarangay) {
-        await advisoriesRepository.deactivateByBarangay(report.selectedBarangay).catch(() => {});
-      }
     }
 
     // Update score and status on the report row

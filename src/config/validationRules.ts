@@ -89,9 +89,10 @@ export function evaluateVerificationStatus(params: {
     agreeCount > disagreeCount &&
     rrs >= VALIDATION_RULES.RRS_THRESHOLD;
 
-  // Immediate dispute/rejection closure:
-  // If the report receives 5 or more dispute/disagree votes with dispute majority, immediately close without waiting 7 days
-  const shouldClose = disagreeCount >= VALIDATION_RULES.MIN_RESPONSES && disagreeCount > agreeCount;
+  // Per Table 7 R8, Methodology, and Figures 1 & 2:
+  // Reports remain in 'Pending Validation' during the 7-day voting window.
+  // Reports only close when the 7-day window expires without achieving verification criteria.
+  const shouldClose = false;
 
   return { lvs, cv, rrs, shouldVerify, shouldClose };
 }
