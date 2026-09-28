@@ -363,17 +363,6 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
       console.log(
         `[AdvisoryTrigger] VERIFICATION THRESHOLD MET: Total votes (${total}) >= 5, LVS=1, agree (${agreeCount}) > disagree (${disagreeCount}), RRS (${reportReliabilityScore}) >= 0.70 marked report ${reportId} as Verified.`
       );
-    } else if (shouldClose) {
-      newStatus = 'Closed';
-
-      console.log(
-        `[DisputeClosure] DISPUTE THRESHOLD MET: Disagree/Dispute votes (${disagreeCount}) >= 5 (disagree > agree) marked report ${reportId} immediately as Closed without waiting for 7 days.`
-      );
-
-      if (report.selectedBarangay) {
-        await advisoriesRepository.deactivateByBarangay(report.selectedBarangay).catch(() => {});
-      }
-    }
 
       // Auto-generate GIS Advisory entry across all 17 LGUs
       const lguMap: Record<string, string[]> = {
@@ -435,6 +424,16 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
         selectedBarangay: report.selectedBarangay,
         reporterUserId: report.citizenId,
       }).catch((pushErr) => console.error('[PushNotification] Error sending push advisory:', pushErr));
+    } else if (shouldClose) {
+      newStatus = 'Closed';
+
+      console.log(
+        `[DisputeClosure] DISPUTE THRESHOLD MET: Disagree/Dispute votes (${disagreeCount}) >= 5 (disagree > agree) marked report ${reportId} immediately as Closed without waiting for 7 days.`
+      );
+
+      if (report.selectedBarangay) {
+        await advisoriesRepository.deactivateByBarangay(report.selectedBarangay).catch(() => {});
+      }
     }
 
     // Update score and status on the report row
