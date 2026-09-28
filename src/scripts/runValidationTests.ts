@@ -26,7 +26,7 @@ interface TestCaseResult {
 const results: TestCaseResult[] = [];
 
 console.log('================================================================');
-console.log('🧪 RUNNING ROADWATCH VALIDATION RULES EMPIRICAL TEST SUITE (11 TESTS)');
+console.log('🧪 RUNNING ROADWATCH VALIDATION RULES EMPIRICAL TEST SUITE (13 TESTS)');
 console.log('================================================================\n');
 
 // ── Test 1: 2 votes, onsite 2-0, overall 2-0 -> Pending
@@ -296,6 +296,34 @@ console.log('================================================================\n'
   });
 }
 
+// ── Test 13: Repair photo submission distance geofence (Test CR06 in Table 15)
+// Citizen taking repair photo from 45m (> 30m limit) is rejected; <= 30m is accepted
+{
+  function evaluateRepairPhotoProximity(distanceMeters: number): { allowed: boolean; status: number; error?: string } {
+    if (distanceMeters > VALIDATION_RULES.LOCATION_RADIUS_M) {
+      return {
+        allowed: false,
+        status: 403,
+        error: `Capturing repair evidence is only permitted within 30 meters of the road condition (you are currently ${Math.round(distanceMeters)}m away).`,
+      };
+    }
+    return { allowed: true, status: 200 };
+  }
+
+  const attempt45m = evaluateRepairPhotoProximity(45);
+  const attempt25m = evaluateRepairPhotoProximity(25);
+  const passed = !attempt45m.allowed && attempt45m.status === 403 && attempt25m.allowed && attempt25m.status === 200;
+
+  results.push({
+    testNumber: 13,
+    description: 'Repair photo geofence (CR06): 45m rejected (403), 25m accepted (200)',
+    expectedStatus: '45m: Rejected (403), 25m: Accepted (200)',
+    actualStatus: `45m: ${attempt45m.allowed ? 'Allowed' : 'Rejected (403)'}, 25m: ${attempt25m.allowed ? 'Accepted (200)' : 'Rejected'}`,
+    passed,
+    notes: 'Strict <= 30m geofence enforced per Table 7 R10-R11 & Test CR06.',
+  });
+}
+
 // ── Print Results Table
 console.table(
   results.map(r => ({
@@ -312,7 +340,7 @@ console.table(
 const allPassed = results.every(r => r.passed);
 console.log('\n----------------------------------------------------------------');
 if (allPassed) {
-  console.log('🎉 ALL 11 EMPIRICAL VALIDATION & RESOLUTION TESTS PASSED (100%)');
+  console.log(`🎉 ALL ${results.length} EMPIRICAL VALIDATION & RESOLUTION TESTS PASSED (100%)`);
 } else {
   console.error('❌ SOME TESTS FAILED');
   process.exit(1);

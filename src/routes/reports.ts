@@ -480,7 +480,7 @@ router.post(
         return;
       }
 
-      // Enforce 30m Proximity Gate for repair photo capture
+      // Enforce 30m Proximity Gate for repair photo capture (Table 7 R10-R11 & Test CR06)
       const targetLat = report.reportLatitude || report.capturedLatitude;
       const targetLng = report.reportLongitude || report.capturedLongitude;
       const numLat = typeof voterLatitude === 'string' ? parseFloat(voterLatitude) : voterLatitude;
@@ -488,10 +488,10 @@ router.post(
 
       if (typeof numLat === 'number' && !isNaN(numLat) && typeof numLng === 'number' && !isNaN(numLng) && targetLat && targetLng) {
         const distanceMeters = calculateHaversineDistanceMeters(numLat, numLng, targetLat, targetLng);
-        if (distanceMeters > 100) {
+        if (distanceMeters > VALIDATION_RULES.LOCATION_RADIUS_M) {
           res.status(403).json({
             success: false,
-            error: `Capturing repair evidence is only permitted within 100 meters of the road condition (you are currently ${Math.round(distanceMeters)}m away).`,
+            error: `Capturing repair evidence is only permitted within 30 meters of the road condition (you are currently ${Math.round(distanceMeters)}m away).`,
           });
           return;
         }
