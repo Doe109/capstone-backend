@@ -48,7 +48,7 @@ export function computeCV(agreeCount: number, totalCount: number): number {
 }
 
 /**
- * Computes Road Reliability Score (RRS).
+ * Computes Report Reliability Score (RRS).
  * RRS = 0.60 * LVS + 0.40 * CV
  */
 export function computeRRS(lvs: number, cv: number): number {
