@@ -5,7 +5,7 @@
 
 import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { getPool } from '../database/connection';
-import { RoadAdvisory } from '../types/report';
+import { RoadAdvisory, SeverityLevel } from '../types/report';
 
 // ── Row → Domain helper ─────────────────────────────────────────────
 
@@ -15,6 +15,7 @@ function rowToAdvisory(row: RowDataPacket): RoadAdvisory {
     title: row.title,
     location: row.location,
     selectedBarangay: row.selectedBarangay ?? undefined,
+    severityLevel: (row.severityLevel as SeverityLevel) ?? undefined,
     message: row.message,
     issuedAt: row.issuedAt,
     active: row.active === 1 || row.active === true,
@@ -36,19 +37,21 @@ export async function create(advisory: {
   title: string;
   location: string;
   selectedBarangay?: string;
+  severityLevel?: SeverityLevel | null;
   message: string;
   issuedAt: string;
 }): Promise<RoadAdvisory> {
   const pool = getPool();
   await pool.query<ResultSetHeader>(
     `INSERT INTO advisories
-       (id, title, location, selectedBarangay, message, issuedAt, active)
-     VALUES (?, ?, ?, ?, ?, ?, 1)`,
+       (id, title, location, selectedBarangay, severityLevel, message, issuedAt, active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
     [
       advisory.id,
       advisory.title,
       advisory.location,
       advisory.selectedBarangay ?? null,
+      advisory.severityLevel ?? null,
       advisory.message,
       advisory.issuedAt,
     ],

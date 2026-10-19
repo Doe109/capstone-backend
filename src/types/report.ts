@@ -5,10 +5,14 @@
 
 export type RoadConditionType =
   | 'Pothole'
+  | 'Alligator Cracks'
+  | 'Raveling'
+  | 'Longitudinal Cracks'
+  | 'Transverse Cracks'
+  // Legacy types preserved for existing database records:
+  | 'Damaged Road Pavement'
   | 'Road crack'
-  | 'Damaged pavement'
-  | 'Surface deterioration'
-  | 'Uneven road surface';
+  | 'Damaged pavement';
 
 export type ReportStatus =
   | 'Pending Validation'
@@ -23,11 +27,14 @@ export type LocationEvidenceStatus = 'Captured' | 'Permission Denied' | 'Failed'
 
 export type VoteType = 'agree' | 'disagree';
 
+export type SeverityLevel = 'FAIR' | 'POOR' | 'BAD';
+
 export interface RoadReport {
   id: string;
   citizenId: string;
   citizenName: string;
   conditionType: RoadConditionType;
+  severityLevel?: SeverityLevel;
   description: string;
   photoUri: string;
   photoCapturedAt: string;
@@ -67,6 +74,25 @@ export interface RoadReport {
   resolutionPhotoUri?: string | null;
   resolvedByCitizenId?: string | null;
   userVote?: VoteType | null;
+  userSeverityVote?: SeverityLevel | null;
+
+  // Read-only empirical metrics fields
+  onsiteAgreeCount?: number;
+  onsiteDisagreeCount?: number;
+  voteCounts?: {
+    agreeCount: number;
+    disagreeCount: number;
+    onsiteAgreeCount: number;
+    onsiteDisagreeCount: number;
+  };
+  votes?: Array<{
+    id: string;
+    citizenId: string;
+    voteType: VoteType;
+    severityLevel?: SeverityLevel | null;
+    distanceMeters?: number | null;
+    votedAt: string;
+  }>;
 }
 
 export interface CommunityVote {
@@ -74,6 +100,7 @@ export interface CommunityVote {
   reportId: string;
   citizenId: string;
   voteType: VoteType;
+  severityLevel?: SeverityLevel | null;
   votedAt: string;
   distanceMeters?: number | null;
 }
@@ -83,6 +110,7 @@ export interface RoadAdvisory {
   title: string;
   location: string;
   selectedBarangay?: string;
+  severityLevel?: SeverityLevel | null;
   message: string;
   issuedAt: string;
   active: boolean;

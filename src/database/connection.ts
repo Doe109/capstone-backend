@@ -5,6 +5,7 @@
  */
 
 import mysql, { Pool } from 'mysql2/promise';
+import { computeCV, computeLVS, computeRRS } from '../config/validationRules';
 
 let pool: Pool | null = null;
 
@@ -116,7 +117,37 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       console.log('✅ Added missing distanceMeters column to community_votes table');
     }
 
-    // 8. Migrate any existing 'Disputed' reports to 'Closed'
+    // 8. Add severityLevel column to reports if missing
+    const [reportSevCols] = (await db.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'reports' AND COLUMN_NAME = 'severityLevel'`,
+      [dbName]
+    )) as any;
+    if (reportSevCols.length === 0) {
+      await db.query(`ALTER TABLE reports ADD COLUMN severityLevel VARCHAR(20) NOT NULL DEFAULT 'POOR'`);
+      console.log('✅ Added missing severityLevel column to reports table');
+    }
+
+    // 9. Add severityLevel column to community_votes if missing
+    const [voteSevCols] = (await db.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'community_votes' AND COLUMN_NAME = 'severityLevel'`,
+      [dbName]
+    )) as any;
+    if (voteSevCols.length === 0) {
+      await db.query(`ALTER TABLE community_votes ADD COLUMN severityLevel VARCHAR(20) NULL`);
+      console.log('✅ Added missing severityLevel column to community_votes table');
+    }
+
+    // 10. Add severityLevel column to advisories if missing
+    const [advSevCols] = (await db.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'advisories' AND COLUMN_NAME = 'severityLevel'`,
+      [dbName]
+    )) as any;
+    if (advSevCols.length === 0) {
+      await db.query(`ALTER TABLE advisories ADD COLUMN severityLevel VARCHAR(20) NULL`);
+      console.log('✅ Added missing severityLevel column to advisories table');
+    }
+
+    // 11. Migrate any existing 'Disputed' reports to 'Closed'
     try {
       const [disputedUpdates] = (await db.query(
         `UPDATE reports SET reportStatus = 'Closed' WHERE reportStatus = 'Disputed'`
@@ -156,6 +187,61 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       }
     } catch (testerSeedErr) {
       console.warn('Notice seeding tester users:', testerSeedErr);
+    }
+
+    // 12. One-time recomputation of LVS, CV, RRS for existing reports based on community_votes
+    try {
+      const [reports] = (await db.query(`SELECT id, confirmCount, disputeCount FROM reports`)) as any;
+      for (const rep of reports) {
+        const reportId = rep.id;
+        const [counts] = (await db.query(
+          `SELECT
+             SUM(CASE WHEN voteType = 'agree' THEN 1 ELSE 0 END) AS agreeCount,
+             SUM(CASE WHEN voteType = 'disagree' THEN 1 ELSE 0 END) AS disagreeCount,
+             SUM(CASE WHEN voteType = 'agree' AND distanceMeters IS NOT NULL AND distanceMeters <= 30 THEN 1 ELSE 0 END) AS onsiteAgreeCount,
+             SUM(CASE WHEN voteType = 'disagree' AND distanceMeters IS NOT NULL AND distanceMeters <= 30 THEN 1 ELSE 0 END) AS onsiteDisagreeCount
+           FROM community_votes
+           WHERE reportId = ?`,
+          [reportId]
+        )) as any;
+        const row = counts[0] || {};
+        let agree = Number(row.agreeCount || 0);
+        let disagree = Number(row.disagreeCount || 0);
+        const onsiteAgree = Number(row.onsiteAgreeCount || 0);
+        const onsiteDisagree = Number(row.onsiteDisagreeCount || 0);
+
+        // Check if rows actually exist in community_votes
+        const [voteRows] = (await db.query(
+          `SELECT id FROM community_votes WHERE reportId = ? LIMIT 1`,
+          [reportId]
+        )) as any;
+
+        // If no rows exist in community_votes, fallback to report table counts (with 0 on-site votes)
+        if (voteRows.length === 0 && (rep.confirmCount > 0 || rep.disputeCount > 0)) {
+          agree = Number(rep.confirmCount || 0);
+          disagree = Number(rep.disputeCount || 0);
+        }
+
+        const total = agree + disagree;
+        // Strict rule: LVS is based only on votes within 30m. 0 on-site votes -> LVS = 0.000!
+        const lvs = computeLVS(onsiteAgree, onsiteDisagree);
+        const cv = computeCV(agree, total);
+        const rrs = computeRRS(lvs, cv);
+
+        await db.query(
+          `UPDATE reports
+           SET locationValidationScore = ?,
+               communityValidationScore = ?,
+               reportReliabilityScore = ?,
+               communityAgreeCount = ?,
+               communityDisagreeCount = ?
+           WHERE id = ?`,
+          [lvs, cv, rrs, agree, disagree, reportId]
+        );
+      }
+      console.log(`✅ One-time recompute of LVS, CV, and RRS scores completed for existing reports`);
+    } catch (recomputeErr) {
+      console.warn('Notice during one-time recomputation of report scores:', recomputeErr);
     }
   } catch (migErr) {
     console.warn('Notice during schema migration check:', migErr);

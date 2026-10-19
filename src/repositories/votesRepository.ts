@@ -5,7 +5,7 @@
 
 import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { getPool } from '../database/connection';
-import { CommunityVote, VoteType } from '../types/report';
+import { CommunityVote, SeverityLevel, VoteType } from '../types/report';
 
 /**
  * Insert a community vote.
@@ -18,15 +18,16 @@ export async function createVote(vote: {
   reportId: string;
   citizenId: string;
   voteType: VoteType;
+  severityLevel?: SeverityLevel | null;
   votedAt: string;
   distanceMeters?: number | null;
 }): Promise<{ success: true; vote: CommunityVote } | { success: false; error: string }> {
   const pool = getPool();
   try {
     await pool.query<ResultSetHeader>(
-      `INSERT INTO community_votes (id, reportId, citizenId, voteType, votedAt, distanceMeters)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [vote.id, vote.reportId, vote.citizenId, vote.voteType, vote.votedAt, vote.distanceMeters ?? null],
+      `INSERT INTO community_votes (id, reportId, citizenId, voteType, severityLevel, votedAt, distanceMeters)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [vote.id, vote.reportId, vote.citizenId, vote.voteType, vote.severityLevel ?? null, vote.votedAt, vote.distanceMeters ?? null],
     );
     return { success: true, vote };
   } catch (err: unknown) {
@@ -52,6 +53,25 @@ export async function getUserVote(
   );
   if (rows.length === 0) return null;
   return rows[0].voteType as VoteType;
+}
+
+/**
+ * Get a citizen's complete vote details (including severityLevel).
+ */
+export async function getUserVoteDetails(
+  reportId: string,
+  citizenId: string,
+): Promise<{ voteType: VoteType; severityLevel: SeverityLevel | null } | null> {
+  const pool = getPool();
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT voteType, severityLevel FROM community_votes WHERE reportId = ? AND citizenId = ? LIMIT 1`,
+    [reportId, citizenId],
+  );
+  if (rows.length === 0) return null;
+  return {
+    voteType: rows[0].voteType as VoteType,
+    severityLevel: (rows[0].severityLevel as SeverityLevel) || null,
+  };
 }
 
 /**
@@ -83,4 +103,83 @@ export async function getVoteCounts(
     onsiteAgreeCount: Number(row?.onsiteAgreeCount ?? 0),
     onsiteDisagreeCount: Number(row?.onsiteDisagreeCount ?? 0),
   };
+}
+
+/**
+ * Compute the majority severity among the original report and all peer validation votes.
+ * In case of a tie, priority order is BAD > POOR > FAIR (precautionary road safety principle).
+ */
+export async function calculateMajoritySeverity(
+  reportId: string,
+  initialReporterSeverity?: SeverityLevel | null,
+): Promise<SeverityLevel> {
+  const pool = getPool();
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT severityLevel FROM community_votes 
+     WHERE reportId = ? AND voteType = 'agree' AND severityLevel IS NOT NULL`,
+    [reportId],
+  );
+
+  const tallies: Record<SeverityLevel, number> = {
+    BAD: 0,
+    POOR: 0,
+    FAIR: 0,
+  };
+
+  // 1. Count the reporter's initial severity assessment
+  const reporterSev = initialReporterSeverity || 'POOR';
+  if (tallies[reporterSev] !== undefined) {
+    tallies[reporterSev] += 1;
+  }
+
+  // 2. Count each confirming peer voter's severity assessment
+  for (const row of rows) {
+    const sev = (row.severityLevel || '').toUpperCase() as SeverityLevel;
+    if (tallies[sev] !== undefined) {
+      tallies[sev] += 1;
+    }
+  }
+
+  // 3. Majority wins; tie-breaking safety order: BAD > POOR > FAIR
+  const order: SeverityLevel[] = ['BAD', 'POOR', 'FAIR'];
+  let winningSeverity: SeverityLevel = reporterSev;
+  let maxCount = -1;
+
+  for (const sev of order) {
+    if (tallies[sev] > maxCount) {
+      maxCount = tallies[sev];
+      winningSeverity = sev;
+    }
+  }
+
+  return winningSeverity;
+}
+
+/**
+ * Get all validation votes cast on a report with distance and severity metadata.
+ */
+export async function getVotesForReport(reportId: string): Promise<Array<{
+  id: string;
+  citizenId: string;
+  voteType: VoteType;
+  severityLevel: SeverityLevel | null;
+  distanceMeters: number | null;
+  votedAt: string;
+}>> {
+  const pool = getPool();
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT id, citizenId, voteType, severityLevel, distanceMeters, votedAt
+     FROM community_votes
+     WHERE reportId = ?
+     ORDER BY votedAt ASC`,
+    [reportId],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    citizenId: r.citizenId,
+    voteType: r.voteType as VoteType,
+    severityLevel: (r.severityLevel as SeverityLevel) || null,
+    distanceMeters: r.distanceMeters !== null && r.distanceMeters !== undefined ? Number(r.distanceMeters) : null,
+    votedAt: r.votedAt instanceof Date ? r.votedAt.toISOString() : String(r.votedAt),
+  }));
 }

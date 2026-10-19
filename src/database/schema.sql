@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS reports (
   createdAt DATETIME NOT NULL,
   updatedAt DATETIME NOT NULL,
   submittedAt DATETIME NOT NULL,
-  reportStatus ENUM('Pending Validation', 'Verified', 'Resolved', 'Disputed') NOT NULL DEFAULT 'Pending Validation',
+  reportStatus ENUM('Pending Validation', 'Verified', 'Resolved', 'Disputed', 'Closed') NOT NULL DEFAULT 'Pending Validation',
+  severityLevel VARCHAR(20) NOT NULL DEFAULT 'POOR',
   syncStatus VARCHAR(20) NOT NULL DEFAULT 'synced',
   locationEvidenceStatus VARCHAR(50) NOT NULL,
   communityAgreeCount INT DEFAULT 0,
@@ -69,7 +70,9 @@ CREATE TABLE IF NOT EXISTS community_votes (
   reportId VARCHAR(36) NOT NULL,
   citizenId VARCHAR(36) NOT NULL,
   voteType ENUM('agree', 'disagree') NOT NULL,
+  severityLevel VARCHAR(20) NULL,
   votedAt DATETIME NOT NULL,
+  distanceMeters DECIMAL(8, 2) NULL,
   FOREIGN KEY (reportId) REFERENCES reports(id) ON DELETE CASCADE,
   FOREIGN KEY (citizenId) REFERENCES users(id),
   UNIQUE KEY unique_vote (reportId, citizenId)
@@ -83,6 +86,7 @@ CREATE TABLE IF NOT EXISTS advisories (
   title VARCHAR(255) NOT NULL,
   location VARCHAR(255) NOT NULL,
   selectedBarangay VARCHAR(100),
+  severityLevel VARCHAR(20) NULL,
   message TEXT NOT NULL,
   issuedAt DATETIME NOT NULL,
   active TINYINT(1) DEFAULT 1

@@ -3,11 +3,14 @@ import * as usersRepository from '../repositories/usersRepository';
 
 const expo = new Expo();
 
+import { SeverityLevel } from '../types/report';
+
 export interface PushNotificationParams {
   reportId: string;
   conditionType: string;
   selectedBarangay: string;
   reporterUserId?: string;
+  severityLevel?: SeverityLevel;
 }
 
 /**
@@ -84,10 +87,11 @@ import { getRecommendedAction } from '../routes/reports';
 
 /**
  * Send automatic push notifications to all registered devices when a report becomes Verified / crosses RRS threshold.
+ * Enhanced with DSS Severity level (BAD / POOR / FAIR) and recommended speed advisory.
  * Excludes the reporter so they don't receive an alert for their own submission.
  */
 export async function sendRoadAdvisoryNotification(params: PushNotificationParams): Promise<void> {
-  const { reportId, conditionType, selectedBarangay, reporterUserId } = params;
+  const { reportId, conditionType, selectedBarangay, reporterUserId, severityLevel } = params;
 
   try {
     const rawTokens = await usersRepository.getAllPushTokens(reporterUserId);
@@ -98,12 +102,38 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
 
     const uniqueTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
     const safetyAction = getRecommendedAction(conditionType);
+
+    const normSev = (severityLevel || 'POOR').toUpperCase().trim();
+    let speedLimit = '30-40 kph';
+    let badgeEmoji = '⚠️';
+    let levelLabel = 'POOR';
+
+    if (normSev === 'BAD') {
+      speedLimit = '20-30 kph';
+      badgeEmoji = '🚨';
+      levelLabel = 'BAD';
+    } else if (normSev === 'FAIR') {
+      speedLimit = '50-60 kph';
+      badgeEmoji = 'ℹ️';
+      levelLabel = 'FAIR';
+    }
+
+    const notifTitle = `${badgeEmoji} DSS Road Advisory • ${conditionType} (${speedLimit})`;
+    const notifBody = `[DSS Safe Speed: ${speedLimit} zone • ${levelLabel}] Verified ${conditionType.toLowerCase()} in Brgy. ${selectedBarangay}. ${safetyAction}`;
+
     const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
       to: token,
       sound: 'default',
-      title: `⚠️ Travel with Caution • ${conditionType} Advisory`,
-      body: `Verified ${conditionType.toLowerCase()} in Brgy. ${selectedBarangay}: ${safetyAction}`,
-      data: { reportId, screen: 'report-detail', type: 'advisory', conditionType, barangay: selectedBarangay },
+      title: notifTitle,
+      body: notifBody,
+      data: {
+        reportId,
+        screen: 'report-detail',
+        type: 'advisory',
+        conditionType,
+        barangay: selectedBarangay,
+        severityLevel: severityLevel || 'POOR',
+      },
       priority: 'high',
       channelId: 'default',
     }));
@@ -113,7 +143,7 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
       return;
     }
 
-    console.log(`[pushNotificationService] Sending ${messages.length} verified advisory push notification(s)...`);
+    console.log(`[pushNotificationService] Sending ${messages.length} verified advisory push notification(s) [Severity: ${severityLevel || 'N/A'}]...`);
     await sendPushMessagesSafely(messages);
   } catch (err) {
     console.error('[pushNotificationService] Failed to process push notifications:', err);

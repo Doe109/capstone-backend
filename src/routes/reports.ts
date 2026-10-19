@@ -8,12 +8,13 @@
 
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import { getPool } from '../database/connection';
 import * as reportsRepository from '../repositories/reportsRepository';
 import * as votesRepository from '../repositories/votesRepository';
 import * as advisoriesRepository from '../repositories/advisoriesRepository';
 import { authenticate, optionalAuthenticate } from '../middleware/auth';
 import { upload } from '../middleware/upload';
-import { ReportStatus, VoteType } from '../types/report';
+import { ReportStatus, SeverityLevel, VoteType } from '../types/report';
 import {
   VALIDATION_RULES,
   computeLVS,
@@ -63,17 +64,27 @@ export function getRecommendedAction(conditionType?: string | null): string {
   if (normalized === 'pothole') {
     return 'Slow down and go around the hole if it is safe to do so, without swerving suddenly into the path of oncoming vehicles. Keep a safe distance from the vehicle ahead so the hole can be seen early. Motorcycles that must pass over it should slow down as much as possible and keep the motorcycle straight.';
   }
-  if (normalized === 'road crack' || normalized === 'crack') {
+  if (normalized === 'alligator cracks' || normalized === 'alligator crack') {
     return 'Proceed with care and do not drive fast over the cracked section. Motorcycles should not ride along a crack that runs in the same direction as the lane, and should cross it at an angle instead.';
   }
-  if (normalized === 'damaged pavement') {
+  if (normalized === 'raveling' || normalized === 'damaged road pavement' || normalized === 'damaged pavement') {
     return 'Slow down and expect broken pavement and loose gravel or sand. Keep a following distance of at least two to three seconds, and avoid sudden braking or quick turns, which can cause skidding.';
   }
-  if (normalized === 'surface deterioration') {
-    return 'Reduce speed. The surface may become slippery when wet, so allow extra braking distance and avoid hard braking or sharp turns. Motorcycles should use both brakes gently.';
+  if (normalized === 'longitudinal cracks' || normalized === 'longitudinal crack') {
+    return 'Proceed with care and do not drive fast over the cracked section. Motorcycles should not ride along a crack that runs in the same direction as the lane, and should cross it at an angle instead.';
   }
-  if (normalized === 'uneven road surface' || normalized === 'uneven road') {
-    return 'Reduce speed and drive carefully over the uneven section, keeping the vehicle on a straight course.';
+  if (normalized === 'transverse cracks' || normalized === 'transverse crack') {
+    return 'Proceed with care and do not drive fast over the cracked section. Two-wheelers should cross perpendicular cracks squarely without abrupt throttle or brake input.';
+  }
+  // Generic fallback
+  if (normalized.includes('crack')) {
+    return 'Proceed with care and do not drive fast over the cracked section. Motorcycles should not ride along a crack that runs in the same direction as the lane, and should cross it at an angle instead.';
+  }
+  if (normalized.includes('pothole')) {
+    return 'Slow down and navigate safely around the hole. Maintain safe following distance.';
+  }
+  if (normalized.includes('pavement') || normalized.includes('raveling')) {
+    return 'Slow down and expect broken pavement and loose gravel or sand. Keep a following distance and avoid sudden braking or quick turns.';
   }
   return 'Proceed with caution, reduce speed, and observe road conditions carefully.';
 }
@@ -96,7 +107,7 @@ router.post(
 
       const {
         id,
-        conditionType, description, photoCapturedAt,
+        conditionType, severityLevel, description, photoCapturedAt,
         capturedLatitude, capturedLongitude, locationAccuracyMeters,
         reportLatitude, reportLongitude,
         selectedBarangay, locationEvidenceStatus, citizenName,
@@ -161,6 +172,7 @@ router.post(
         citizenId: user.userId,
         citizenName: citizenName || 'Citizen',
         conditionType,
+        severityLevel: severityLevel || 'POOR',
         description: finalDescription,
         photoUri,
         photoCapturedAt: formatMysqlDateTime(photoCapturedAt),
@@ -229,9 +241,31 @@ router.get('/:id', optionalAuthenticate, async (req: Request<{ id: string }>, re
       res.status(404).json({ success: false, error: 'Report not found.' });
       return;
     }
-    const userVote = req.user ? await votesRepository.getUserVote(reportId, req.user.userId) : null;
-    const userRepairVote = req.user ? await reportsRepository.getUserRepairVote(reportId, req.user.userId) : null;
-    res.json({ success: true, report, userVote, userRepairVote });
+    const targetReportId = report.id || reportId;
+    const rawVote = req.user ? await votesRepository.getUserVoteDetails(targetReportId, req.user.userId) : null;
+    const userVote = rawVote ? rawVote.voteType : null;
+    const userSeverityVote = rawVote ? rawVote.severityLevel : null;
+    const userRepairVote = req.user ? await reportsRepository.getUserRepairVote(targetReportId, req.user.userId) : null;
+    const voteCounts = await votesRepository.getVoteCounts(targetReportId);
+    const votes = await votesRepository.getVotesForReport(targetReportId);
+
+    const enrichedReport = {
+      ...report,
+      onsiteAgreeCount: voteCounts.onsiteAgreeCount,
+      onsiteDisagreeCount: voteCounts.onsiteDisagreeCount,
+      voteCounts,
+      votes,
+    };
+
+    res.json({
+      success: true,
+      report: enrichedReport,
+      userVote,
+      userSeverityVote,
+      userRepairVote,
+      voteCounts,
+      votes,
+    });
   } catch (error) {
     console.error('Get report error:', error);
     res.status(500).json({ success: false, error: 'Internal server error.' });
@@ -245,10 +279,11 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
     const user = req.user!;
     const rawId = req.params.id;
     const reportId = decodeURIComponent(rawId || '').trim();
-    const { voteType, voterLatitude, voterLongitude } = req.body as {
+    const { voteType, voterLatitude, voterLongitude, severityLevel } = req.body as {
       voteType: VoteType;
       voterLatitude?: number;
       voterLongitude?: number;
+      severityLevel?: SeverityLevel;
     };
 
     if (!voteType || !['agree', 'disagree'].includes(voteType)) {
@@ -270,7 +305,16 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
     }
 
     const isSimulated = req.body.isSimulatedPeerVote === true;
-    const voterCitizenId = isSimulated ? uuidv4() : user.userId;
+    let voterCitizenId = user.userId;
+    if (isSimulated) {
+      voterCitizenId = uuidv4();
+      const pool = getPool();
+      await pool.query(
+        `INSERT IGNORE INTO users (id, email, passwordHash, fullName, firstName, lastName)
+         VALUES (?, ?, 'simulated_dummy_hash', 'Simulated Citizen', 'Simulated', 'Citizen')`,
+        [voterCitizenId, `simulated_${voterCitizenId}@example.com`]
+      );
+    }
 
     // Prevent author from voting on own report (unless in simulated test mode)
     if (report.citizenId === user.userId && !isSimulated) {
@@ -315,13 +359,14 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
       }
     }
 
-    // Insert vote with distanceMeters (catches duplicate-key cleanly)
+    // Insert vote with distanceMeters and optional severityLevel (catches duplicate-key cleanly)
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
     const voteResult = await votesRepository.createVote({
       id: uuidv4(),
       reportId,
       citizenId: voterCitizenId,
       voteType,
+      severityLevel: severityLevel ?? null,
       votedAt: now,
       distanceMeters,
     });
@@ -358,11 +403,17 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
 
     let newStatus: ReportStatus | undefined = undefined;
 
+    // Determine majority severity across all validation votes
+    const determinedSeverity = await votesRepository.calculateMajoritySeverity(
+      reportId,
+      report.severityLevel
+    );
+
     if (shouldVerify) {
       newStatus = 'Verified';
 
       console.log(
-        `[AdvisoryTrigger] VERIFICATION THRESHOLD MET: Total votes (${total}) >= 5, LVS=1, agree (${agreeCount}) > disagree (${disagreeCount}), RRS (${reportReliabilityScore}) >= 0.70 marked report ${reportId} as Verified.`
+        `[AdvisoryTrigger] VERIFICATION THRESHOLD MET: Total votes (${total}) >= 5, LVS=1, agree (${agreeCount}) > disagree (${disagreeCount}), RRS (${reportReliabilityScore}) >= 0.70 marked report ${reportId} as Verified. Determined Severity: ${determinedSeverity}`
       );
 
       // Auto-generate GIS Advisory entry across all 17 LGUs
@@ -408,13 +459,24 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
         lguName = 'Ozamiz City';
       }
 
+      let advTitle = `⚠️ Road Hazard: ${report.conditionType} Advisory`;
+      let speedRange = '30-40 kph zone';
+      if (determinedSeverity === 'BAD') {
+        advTitle = `🚨 Critical Hazard: ${report.conditionType} Warning`;
+        speedRange = '20-30 kph zone';
+      } else if (determinedSeverity === 'FAIR') {
+        advTitle = `ℹ️ Road Notice: ${report.conditionType} Advisory`;
+        speedRange = '50-60 kph zone';
+      }
+
       const safetyAction = getRecommendedAction(report.conditionType);
       advisoriesRepository.create({
         id: uuidv4(),
-        title: `${report.conditionType} Warning`,
+        title: advTitle,
         location: `Brgy. ${report.selectedBarangay}, ${lguName}`,
         selectedBarangay: report.selectedBarangay,
-        message: `${safetyAction} (Validated ${report.conditionType.toLowerCase()} in Brgy. ${report.selectedBarangay}, ${lguName})`,
+        severityLevel: determinedSeverity,
+        message: `${determinedSeverity} condition (${speedRange}) sa Brgy. ${report.selectedBarangay}, ${lguName} — ${report.conditionType}. ${safetyAction}`,
         issuedAt: now,
       }).catch((advErr) => console.error('[AdvisoryTrigger] Error creating advisory:', advErr));
 
@@ -424,14 +486,16 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
         conditionType: report.conditionType,
         selectedBarangay: report.selectedBarangay,
         reporterUserId: report.citizenId,
+        severityLevel: determinedSeverity,
       }).catch((pushErr) => console.error('[PushNotification] Error sending push advisory:', pushErr));
     }
 
-    // Update score and status on the report row
+    // Update score, status, and majority severity on the report row
     const updatedReport = await reportsRepository.updateReportScores(reportId, {
       communityValidationScore,
       locationValidationScore,
       reportReliabilityScore,
+      severityLevel: determinedSeverity,
       ...(newStatus ? { reportStatus: newStatus } : {}),
     });
 

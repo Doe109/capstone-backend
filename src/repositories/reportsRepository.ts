@@ -6,9 +6,10 @@
 
 import { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { getPool } from '../database/connection';
-import { ReportStatus, RoadReport, VoteType } from '../types/report';
+import { ReportStatus, RoadReport, SeverityLevel, VoteType } from '../types/report';
 import * as advisoriesRepository from './advisoriesRepository';
-import { computeCV, computeRRS } from '../config/validationRules';
+import * as votesRepository from './votesRepository';
+import { computeCV, computeLVS, computeRRS } from '../config/validationRules';
 
 function formatIsoTimestamp(val: any): string {
   if (!val) return val;
@@ -28,6 +29,7 @@ function rowToReport(row: RowDataPacket): RoadReport {
     citizenId: row.citizenId,
     citizenName: row.citizenName,
     conditionType: row.conditionType,
+    severityLevel: (row.severityLevel as SeverityLevel) || 'POOR',
     description: row.description,
     photoUri: row.photoUri,
     photoCapturedAt: formatIsoTimestamp(row.photoCapturedAt),
@@ -73,6 +75,7 @@ export async function createReport(report: {
   citizenId: string;
   citizenName: string;
   conditionType: string;
+  severityLevel?: string;
   description: string;
   photoUri: string;
   photoCapturedAt: string;
@@ -88,18 +91,19 @@ export async function createReport(report: {
   locationEvidenceStatus: string;
 }): Promise<RoadReport> {
   const pool = getPool();
+  const severity = report.severityLevel || 'POOR';
   await pool.query<ResultSetHeader>(
     `INSERT INTO reports
-       (id, citizenId, citizenName, conditionType, description,
+       (id, citizenId, citizenName, conditionType, severityLevel, description,
         photoUri, photoCapturedAt,
         capturedLatitude, capturedLongitude, locationAccuracyMeters,
         reportLatitude, reportLongitude, selectedBarangay,
         createdAt, updatedAt, submittedAt,
         reportStatus, syncStatus, locationEvidenceStatus)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Validation', 'synced', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Validation', 'synced', ?)`,
     [
       report.id, report.citizenId, report.citizenName,
-      report.conditionType, report.description,
+      report.conditionType, severity, report.description,
       report.photoUri, report.photoCapturedAt,
       report.capturedLatitude, report.capturedLongitude, report.locationAccuracyMeters,
       report.reportLatitude, report.reportLongitude, report.selectedBarangay,
@@ -254,6 +258,7 @@ export async function updateReportScores(
     locationValidationScore?: number;
     reportReliabilityScore?: number;
     reportStatus?: ReportStatus;
+    severityLevel?: SeverityLevel;
   },
 ): Promise<RoadReport | null> {
   const pool = getPool();
@@ -269,6 +274,9 @@ export async function updateReportScores(
   }
   if (scores.reportReliabilityScore !== undefined) {
     updates.reportReliabilityScore = scores.reportReliabilityScore;
+  }
+  if (scores.severityLevel) {
+    updates.severityLevel = scores.severityLevel;
   }
   if (scores.reportStatus) {
     updates.reportStatus = scores.reportStatus;
@@ -470,11 +478,12 @@ export async function testEditReport(
   if (!report) return null;
 
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const voteCounts = await votesRepository.getVoteCounts(reportId);
   const agree = updates.communityAgreeCount ?? report.communityAgreeCount;
   const disagree = updates.communityDisagreeCount ?? report.communityDisagreeCount;
   const total = agree + disagree;
   const communityValidationScore = computeCV(agree, total);
-  const locationValidationScore = report.locationValidationScore;
+  const locationValidationScore = computeLVS(voteCounts.onsiteAgreeCount, voteCounts.onsiteDisagreeCount);
   const reportReliabilityScore = computeRRS(locationValidationScore, communityValidationScore);
 
   const lat = updates.reportLatitude ?? updates.capturedLatitude ?? null;
@@ -494,6 +503,7 @@ export async function testEditReport(
          communityAgreeCount = ?,
          communityDisagreeCount = ?,
          communityValidationScore = ?,
+         locationValidationScore = ?,
          reportReliabilityScore = ?,
          repairAgreeCount = COALESCE(?, repairAgreeCount),
          repairDisagreeCount = COALESCE(?, repairDisagreeCount),
@@ -513,6 +523,7 @@ export async function testEditReport(
       agree,
       disagree,
       communityValidationScore,
+      locationValidationScore,
       reportReliabilityScore,
       updates.repairAgreeCount ?? null,
       updates.repairDisagreeCount ?? null,
