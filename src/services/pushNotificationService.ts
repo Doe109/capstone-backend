@@ -83,8 +83,6 @@ export async function sendNewReportNotification(params: PushNotificationParams):
   }
 }
 
-import { getRecommendedAction } from '../routes/reports';
-
 /**
  * Send automatic push notifications to all registered devices when a report becomes Verified / crosses RRS threshold.
  * Enhanced with DSS Severity level (BAD / POOR / FAIR) and recommended speed advisory.
@@ -101,25 +99,25 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
     }
 
     const uniqueTokens = Array.from(new Set(rawTokens.filter((token) => Expo.isExpoPushToken(token))));
-    const safetyAction = getRecommendedAction(conditionType);
 
     const normSev = (severityLevel || 'POOR').toUpperCase().trim();
     let speedLimit = '30-40 kph';
     let badgeEmoji = '⚠️';
-    let levelLabel = 'POOR';
+    let actionVerb = 'exercise caution';
 
     if (normSev === 'BAD') {
       speedLimit = '20-30 kph';
       badgeEmoji = '🚨';
-      levelLabel = 'BAD';
+      actionVerb = 'exercise extreme caution';
     } else if (normSev === 'FAIR') {
       speedLimit = '50-60 kph';
       badgeEmoji = 'ℹ️';
-      levelLabel = 'FAIR';
+      actionVerb = 'proceed with care';
     }
 
-    const notifTitle = `${badgeEmoji} DSS Road Advisory • ${conditionType} (${speedLimit})`;
-    const notifBody = `[DSS Safe Speed: ${speedLimit} zone • ${levelLabel}] Verified ${conditionType.toLowerCase()} in Brgy. ${selectedBarangay}. ${safetyAction}`;
+    const cleanBarangay = (selectedBarangay || '').replace(/^Brgy\.?\s*/i, '').trim();
+    const notifTitle = `${badgeEmoji} Road Advisory: ${conditionType} in Brgy. ${cleanBarangay || selectedBarangay}`;
+    const notifBody = `Verified road hazard. Motorists are advised to slow down to ${speedLimit} and ${actionVerb} when traveling through this area.`;
 
     const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
       to: token,

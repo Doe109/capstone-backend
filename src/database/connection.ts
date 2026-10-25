@@ -159,19 +159,19 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       console.warn('Notice migrating Disputed reports:', dispErr);
     }
 
-    // 9. Ensure research testing accounts exist (reporter + 5 voters)
+    // 9. Ensure research and demo test accounts exist
     try {
       const bcrypt = require('bcrypt');
       const hash = await bcrypt.hash('password123', 10);
 
       const testAccounts = [
-        { id: 'usr_tester_roadwatch', email: 'tester@roadwatch.ph', name: 'Research Tester', first: 'Research', last: 'Tester' },
-        { id: 'usr_reporter_roadwatch', email: 'reporter@roadwatch.ph', name: 'Research Reporter', first: 'Research', last: 'Reporter' },
-        { id: 'usr_voter1_roadwatch', email: 'voter1@roadwatch.ph', name: 'Research Voter 1', first: 'Voter', last: 'One' },
-        { id: 'usr_voter2_roadwatch', email: 'voter2@roadwatch.ph', name: 'Research Voter 2', first: 'Voter', last: 'Two' },
-        { id: 'usr_voter3_roadwatch', email: 'voter3@roadwatch.ph', name: 'Research Voter 3', first: 'Voter', last: 'Three' },
-        { id: 'usr_voter4_roadwatch', email: 'voter4@roadwatch.ph', name: 'Research Voter 4', first: 'Voter', last: 'Four' },
-        { id: 'usr_voter5_roadwatch', email: 'voter5@roadwatch.ph', name: 'Research Voter 5', first: 'Voter', last: 'Five' },
+        { id: 'usr_tester_roadwatch', email: 'tester@roadwatch.ph', name: 'Master Tester', first: 'Master', last: 'Tester' },
+        { id: 'usr_reporter_roadwatch', email: 'reporter@roadwatch.ph', name: 'Citizen Reporter', first: 'Citizen', last: 'Reporter' },
+        { id: 'usr_voter1_roadwatch', email: 'voter1@roadwatch.ph', name: 'Peer Voter 1', first: 'Voter', last: 'One' },
+        { id: 'usr_voter2_roadwatch', email: 'voter2@roadwatch.ph', name: 'Peer Voter 2', first: 'Voter', last: 'Two' },
+        { id: 'usr_voter3_roadwatch', email: 'voter3@roadwatch.ph', name: 'Peer Voter 3', first: 'Voter', last: 'Three' },
+        { id: 'usr_voter4_roadwatch', email: 'voter4@roadwatch.ph', name: 'Peer Voter 4', first: 'Voter', last: 'Four' },
+        { id: 'usr_voter5_roadwatch', email: 'voter5@roadwatch.ph', name: 'Peer Voter 5', first: 'Voter', last: 'Five' },
       ];
 
       for (const acc of testAccounts) {
@@ -182,11 +182,11 @@ export async function ensureSchemaUpToDate(): Promise<void> {
              VALUES (?, ?, ?, ?, ?, ?, NOW())`,
             [acc.id, acc.email, hash, acc.name, acc.first, acc.last]
           );
-          console.log(`✅ Seeded research test account: ${acc.email} / password123`);
+          console.log(`✅ Seeded account: ${acc.email} / password123`);
         }
       }
     } catch (testerSeedErr) {
-      console.warn('Notice seeding tester users:', testerSeedErr);
+      console.warn('Notice seeding test users:', testerSeedErr);
     }
 
     // 12. One-time recomputation of LVS, CV, RRS for existing reports based on community_votes

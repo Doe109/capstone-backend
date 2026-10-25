@@ -441,13 +441,108 @@ export async function resolveReport(
  * Fast forward a report's createdAt timestamp by X days (for research testing of 7-day validation window expiration).
  */
 export async function fastForwardReportDays(reportId: string, daysAgo: number = 8): Promise<RoadReport | null> {
+  return setReportAgeDays(reportId, daysAgo);
+}
+
+/**
+ * Explicitly set report age in days (e.g. 7 for 'Ni Tung-Tung', 8+ for 'Ni Lapas', 0 for today).
+ * Updates both createdAt and photoCapturedAt so all metadata stays consistent.
+ */
+export async function setReportAgeDays(reportId: string, daysAgo: number): Promise<RoadReport | null> {
   const pool = getPool();
+  const report = await findReportById(reportId);
+  if (!report) return null;
+
+  if (daysAgo === 7) {
+    // 'Ni Tung-Tung sa 7 Days': 7 full days old, active in Pending Validation (last day of window)
+    // Sets createdAt to 7 days ago. If Pending Validation, ensures it is not prematurely closed.
+    await pool.query<ResultSetHeader>(
+      `UPDATE reports 
+       SET createdAt = DATE_SUB(NOW(), INTERVAL 7 DAY),
+           photoCapturedAt = DATE_SUB(NOW(), INTERVAL 7 DAY),
+           updatedAt = NOW()
+       WHERE id = ?`,
+      [reportId]
+    );
+  } else if (daysAgo >= 8) {
+    // 'Ni Lapas sa 7 Days': 8+ days old. Triggers automatic 7-day expiration evaluation!
+    await pool.query<ResultSetHeader>(
+      `UPDATE reports 
+       SET createdAt = DATE_SUB(NOW(), INTERVAL ? DAY),
+           photoCapturedAt = DATE_SUB(NOW(), INTERVAL ? DAY),
+           updatedAt = NOW()
+       WHERE id = ?`,
+      [daysAgo, daysAgo, reportId]
+    );
+    // Auto-evaluate expiration (transitions Pending Validation to Closed if quorum < 5)
+    await evaluateExpiredPendingReports();
+  } else if (daysAgo === 0) {
+    // Fresh report (Just Now / Today)
+    await pool.query<ResultSetHeader>(
+      `UPDATE reports 
+       SET createdAt = NOW(),
+           photoCapturedAt = NOW(),
+           updatedAt = NOW()
+       WHERE id = ?`,
+      [reportId]
+    );
+  } else {
+    await pool.query<ResultSetHeader>(
+      `UPDATE reports 
+       SET createdAt = DATE_SUB(NOW(), INTERVAL ? DAY),
+           photoCapturedAt = DATE_SUB(NOW(), INTERVAL ? DAY),
+           updatedAt = NOW()
+       WHERE id = ?`,
+      [daysAgo, daysAgo, reportId]
+    );
+  }
+
+  return findReportById(reportId);
+}
+
+/**
+ * Resets all votes for a report back to 0 and reverts status to Pending Validation.
+ * Allows test accounts to demonstrate the consensus voting process from scratch.
+ */
+export async function resetReportVotes(reportId: string): Promise<RoadReport | null> {
+  const pool = getPool();
+  const report = await findReportById(reportId);
+  if (!report) return null;
+
+  try {
+    await pool.query(`DELETE FROM community_votes WHERE reportId = ?`, [reportId]);
+  } catch (err) {
+    console.warn('[resetReportVotes] Notice deleting community_votes:', err);
+  }
+
+  try {
+    await pool.query(`DELETE FROM repair_votes WHERE reportId = ?`, [reportId]);
+  } catch (err) {
+    console.warn('[resetReportVotes] Notice deleting repair_votes:', err);
+  }
+
+  // Initial Laplace default score: CV = 0.500, LVS = 0.000, RRS = 0.200
   await pool.query<ResultSetHeader>(
-    `UPDATE reports SET createdAt = DATE_SUB(NOW(), INTERVAL ? DAY) WHERE id = ?`,
-    [daysAgo, reportId]
+    `UPDATE reports 
+     SET communityAgreeCount = 0,
+         communityDisagreeCount = 0,
+         communityValidationScore = 0.500,
+         locationValidationScore = 0.000,
+         reportReliabilityScore = 0.200,
+         repairAgreeCount = 0,
+         repairDisagreeCount = 0,
+         reportStatus = 'Pending Validation',
+         resolutionPhotoUri = NULL,
+         resolvedAt = NULL,
+         updatedAt = NOW()
+     WHERE id = ?`,
+    [reportId]
   );
-  // Trigger expiration evaluation
-  await evaluateExpiredPendingReports();
+
+  if (report.selectedBarangay) {
+    await advisoriesRepository.deactivateByBarangay(report.selectedBarangay).catch(() => {});
+  }
+
   return findReportById(reportId);
 }
 
@@ -471,6 +566,8 @@ export async function testEditReport(
     capturedLatitude?: number;
     capturedLongitude?: number;
     selectedBarangay?: string;
+    createdAt?: string;
+    photoCapturedAt?: string;
   }
 ): Promise<RoadReport | null> {
   const pool = getPool();
@@ -488,6 +585,13 @@ export async function testEditReport(
 
   const lat = updates.reportLatitude ?? updates.capturedLatitude ?? null;
   const lng = updates.reportLongitude ?? updates.capturedLongitude ?? null;
+
+  const formattedCreatedAt = updates.createdAt
+    ? new Date(updates.createdAt).toISOString().slice(0, 19).replace('T', ' ')
+    : null;
+  const formattedCapturedAt = updates.photoCapturedAt
+    ? new Date(updates.photoCapturedAt).toISOString().slice(0, 19).replace('T', ' ')
+    : null;
 
   await pool.query<ResultSetHeader>(
     `UPDATE reports 
@@ -508,6 +612,8 @@ export async function testEditReport(
          repairAgreeCount = COALESCE(?, repairAgreeCount),
          repairDisagreeCount = COALESCE(?, repairDisagreeCount),
          reportStatus = COALESCE(?, reportStatus),
+         createdAt = COALESCE(?, createdAt),
+         photoCapturedAt = COALESCE(?, photoCapturedAt),
          updatedAt = ?
      WHERE id = ?`,
     [
@@ -528,6 +634,8 @@ export async function testEditReport(
       updates.repairAgreeCount ?? null,
       updates.repairDisagreeCount ?? null,
       updates.reportStatus ?? null,
+      formattedCreatedAt,
+      formattedCapturedAt,
       now,
       reportId,
     ]

@@ -741,6 +741,61 @@ router.post(
   }
 );
 
+// ── POST /api/reports/:id/set-age ─────────────────────────────────────
+// Explicitly sets report age in days (7 for 'Ni Tung-Tung', 8 for 'Ni Lapas', 0 for today)
+router.post(
+  '/:id/set-age',
+  optionalAuthenticate,
+  async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    try {
+      const rawId = req.params.id;
+      const reportId = decodeURIComponent(rawId || '').trim();
+      const { daysAgo } = req.body as { daysAgo?: number };
+      const parsedDays = typeof daysAgo === 'number' ? daysAgo : 7;
+
+      const updated = await reportsRepository.setReportAgeDays(reportId, parsedDays);
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Report not found.' });
+        return;
+      }
+      res.status(200).json({
+        success: true,
+        message: `Report age successfully set to ${parsedDays} day(s) ago.`,
+        report: updated,
+      });
+    } catch (error) {
+      console.error('Set report age error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error.' });
+    }
+  }
+);
+
+// ── POST /api/reports/:id/reset-votes ─────────────────────────────────
+// Resets all community votes for this report back to 0 (Pending Validation) for demo
+router.post(
+  '/:id/reset-votes',
+  optionalAuthenticate,
+  async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    try {
+      const rawId = req.params.id;
+      const reportId = decodeURIComponent(rawId || '').trim();
+      const updated = await reportsRepository.resetReportVotes(reportId);
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Report not found.' });
+        return;
+      }
+      res.status(200).json({
+        success: true,
+        message: 'Report votes and reliability score reset to baseline.',
+        report: updated,
+      });
+    } catch (error) {
+      console.error('Reset report votes error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error.' });
+    }
+  }
+);
+
 // ── PUT /api/reports/:id/test-edit ────────────────────────────────────
 // Allows editing report details, replacing photo evidence, and resetting/overriding vote counts for empirical tests
 router.put(
