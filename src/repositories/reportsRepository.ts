@@ -128,11 +128,11 @@ export async function createReport(report: {
 export async function evaluateExpiredPendingReports(): Promise<void> {
   const pool = getPool();
   try {
-    // 1. Expire unverified Pending Validation reports to Closed
+    // 1. Expire unverified Pending Validation reports to Closed when exceeding 7 full days (Day 8+)
     const [expiredRows] = await pool.query<RowDataPacket[]>(
       `SELECT selectedBarangay FROM reports 
        WHERE reportStatus = 'Pending Validation' 
-         AND createdAt < DATE_SUB(NOW(), INTERVAL 7 DAY)`
+         AND createdAt < DATE_SUB(NOW(), INTERVAL 8 DAY)`
     );
 
     await pool.query(
@@ -140,7 +140,7 @@ export async function evaluateExpiredPendingReports(): Promise<void> {
        SET reportStatus = 'Closed',
            updatedAt = NOW()
        WHERE reportStatus = 'Pending Validation' 
-         AND createdAt < DATE_SUB(NOW(), INTERVAL 7 DAY)`
+         AND createdAt < DATE_SUB(NOW(), INTERVAL 8 DAY)`
     );
 
     if (expiredRows && expiredRows.length > 0) {
@@ -455,17 +455,17 @@ export async function setReportAgeDays(reportId: string, daysAgo: number): Promi
 
   if (daysAgo === 7) {
     // 'Ni Tung-Tung sa 7 Days': 7 full days old, active in Pending Validation (last day of window)
-    // Sets createdAt to 7 days ago. If Pending Validation, ensures it is not prematurely closed.
     await pool.query<ResultSetHeader>(
       `UPDATE reports 
        SET createdAt = DATE_SUB(NOW(), INTERVAL 7 DAY),
            photoCapturedAt = DATE_SUB(NOW(), INTERVAL 7 DAY),
+           reportStatus = 'Pending Validation',
            updatedAt = NOW()
        WHERE id = ?`,
       [reportId]
     );
   } else if (daysAgo >= 8) {
-    // 'Ni Lapas sa 7 Days': 8+ days old. Triggers automatic 7-day expiration evaluation!
+    // 'Ni Lapas sa 7 Days': 8+ days old. Triggers automatic 7-day expiration evaluation (Closed if quorum < 5)
     await pool.query<ResultSetHeader>(
       `UPDATE reports 
        SET createdAt = DATE_SUB(NOW(), INTERVAL ? DAY),
@@ -482,6 +482,7 @@ export async function setReportAgeDays(reportId: string, daysAgo: number): Promi
       `UPDATE reports 
        SET createdAt = NOW(),
            photoCapturedAt = NOW(),
+           reportStatus = 'Pending Validation',
            updatedAt = NOW()
        WHERE id = ?`,
       [reportId]
@@ -491,6 +492,7 @@ export async function setReportAgeDays(reportId: string, daysAgo: number): Promi
       `UPDATE reports 
        SET createdAt = DATE_SUB(NOW(), INTERVAL ? DAY),
            photoCapturedAt = DATE_SUB(NOW(), INTERVAL ? DAY),
+           reportStatus = 'Pending Validation',
            updatedAt = NOW()
        WHERE id = ?`,
       [daysAgo, daysAgo, reportId]
