@@ -465,17 +465,23 @@ export async function setReportAgeDays(reportId: string, daysAgo: number): Promi
       [reportId]
     );
   } else if (daysAgo >= 8) {
-    // 'Ni Lapas sa 7 Days': 8+ days old. Triggers automatic 7-day expiration evaluation (Closed if quorum < 5)
+    // 'Ni Lapas sa 7 Days': 8+ days old. If community quorum not reached, transition to Closed
+    const agree = Number(report.communityAgreeCount || 0);
+    const disagree = Number(report.communityDisagreeCount || 0);
+    const total = agree + disagree;
+    const finalStatus = total >= 5 && agree > disagree ? 'Verified' : 'Closed';
     await pool.query<ResultSetHeader>(
       `UPDATE reports 
        SET createdAt = DATE_SUB(NOW(), INTERVAL ? DAY),
            photoCapturedAt = DATE_SUB(NOW(), INTERVAL ? DAY),
+           reportStatus = ?,
            updatedAt = NOW()
        WHERE id = ?`,
-      [daysAgo, daysAgo, reportId]
+      [daysAgo, daysAgo, finalStatus, reportId]
     );
-    // Auto-evaluate expiration (transitions Pending Validation to Closed if quorum < 5)
-    await evaluateExpiredPendingReports();
+    if (finalStatus === 'Closed' && report.selectedBarangay) {
+      await advisoriesRepository.deactivateByBarangay(report.selectedBarangay).catch(() => {});
+    }
   } else if (daysAgo === 0) {
     // Fresh report (Just Now / Today)
     await pool.query<ResultSetHeader>(
