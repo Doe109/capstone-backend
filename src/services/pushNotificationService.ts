@@ -117,7 +117,7 @@ export async function sendRoadAdvisoryNotification(params: PushNotificationParam
 
     const cleanBarangay = (selectedBarangay || '').replace(/^Brgy\.?\s*/i, '').trim();
     const notifTitle = `${badgeEmoji} Road Advisory: ${conditionType} in Brgy. ${cleanBarangay || selectedBarangay}`;
-    const notifBody = `Verified road hazard. Motorists are advised to slow down to ${speedLimit} and ${actionVerb} when traveling through this area.`;
+    const notifBody = `Verified road hazard. Road users are advised to slow down to ${speedLimit} and ${actionVerb} when traveling through this area.`;
 
     const messages: ExpoPushMessage[] = uniqueTokens.map((token) => ({
       to: token,

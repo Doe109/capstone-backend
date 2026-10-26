@@ -31,6 +31,7 @@ export type SeverityLevel = 'FAIR' | 'POOR' | 'BAD';
 
 export interface RoadReport {
   id: string;
+  reportNumber?: number;
   citizenId: string;
   citizenName: string;
   conditionType: RoadConditionType;
@@ -63,6 +64,9 @@ export interface RoadReport {
   // Repair Verification Fields
   repairAgreeCount?: number;
   repairDisagreeCount?: number;
+  previousRepairAgreeCount?: number;
+  previousRepairDisagreeCount?: number;
+  previousResolutionAttemptAt?: string | null;
   userRepairVote?: VoteType | null;
 
   // Backend-specific DSS scores

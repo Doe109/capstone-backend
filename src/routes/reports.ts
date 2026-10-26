@@ -62,29 +62,29 @@ function calculateHaversineDistanceMeters(lat1: number, lon1: number, lat2: numb
 export function getRecommendedAction(conditionType?: string | null): string {
   const normalized = (conditionType || '').toLowerCase().trim();
   if (normalized === 'pothole') {
-    return 'Slow down and go around the hole if it is safe to do so, without swerving suddenly into the path of oncoming vehicles. Keep a safe distance from the vehicle ahead so the hole can be seen early. Motorcycles that must pass over it should slow down as much as possible and keep the motorcycle straight.';
+    return "Slow down when you see a hole in the road. Be extra careful if there is water on the road, since it may be covering a pothole. If you drive over it, hold the steering wheel firmly. Don't slam on the brakes or swerve, because this can cause an accident or endanger other drivers.";
   }
   if (normalized === 'alligator cracks' || normalized === 'alligator crack') {
-    return 'Proceed with care and do not drive fast over the cracked section. Motorcycles should not ride along a crack that runs in the same direction as the lane, and should cross it at an angle instead.';
+    return 'Slow down when you see many small, connected cracks in the road. Cracks can make a motorcycle rider lose control, so look ahead and avoid last-minute moves.';
   }
   if (normalized === 'raveling' || normalized === 'damaged road pavement' || normalized === 'damaged pavement') {
-    return 'Slow down and expect broken pavement and loose gravel or sand. Keep a following distance of at least two to three seconds, and avoid sudden braking or quick turns, which can cause skidding.';
+    return "Slow down when you see loose stones or gravel on the road. Loose gravel acts like marbles under your tires and can make your vehicle skid, especially when turning. Hold the steering wheel firmly and avoid swerving. Don't speed up over the stones, and don't slam on the brakes.";
   }
   if (normalized === 'longitudinal cracks' || normalized === 'longitudinal crack') {
-    return 'Proceed with care and do not drive fast over the cracked section. Motorcycles should not ride along a crack that runs in the same direction as the lane, and should cross it at an angle instead.';
+    return 'Slow down when you see a long crack running the same way as the road. If you must cross it, approach at close to 90° and no less than 45°. Stay relaxed on the controls and brake or accelerate gradually.';
   }
   if (normalized === 'transverse cracks' || normalized === 'transverse crack') {
-    return 'Proceed with care and do not drive fast over the cracked section. Two-wheelers should cross perpendicular cracks squarely without abrupt throttle or brake input.';
+    return 'Slow down when you see a crack running across the road. Cross it at close to 90° where possible. Stay relaxed on the controls and brake or accelerate gradually.';
   }
   // Generic fallback
   if (normalized.includes('crack')) {
-    return 'Proceed with care and do not drive fast over the cracked section. Motorcycles should not ride along a crack that runs in the same direction as the lane, and should cross it at an angle instead.';
+    return 'Slow down when you see many small, connected cracks in the road. Cracks can make a motorcycle rider lose control, so look ahead and avoid last-minute moves.';
   }
   if (normalized.includes('pothole')) {
-    return 'Slow down and navigate safely around the hole. Maintain safe following distance.';
+    return "Slow down when you see a hole in the road. Be extra careful if there is water on the road, since it may be covering a pothole. If you drive over it, hold the steering wheel firmly. Don't slam on the brakes or swerve, because this can cause an accident or endanger other drivers.";
   }
   if (normalized.includes('pavement') || normalized.includes('raveling')) {
-    return 'Slow down and expect broken pavement and loose gravel or sand. Keep a following distance and avoid sudden braking or quick turns.';
+    return "Slow down when you see loose stones or gravel on the road. Loose gravel acts like marbles under your tires and can make your vehicle skid, especially when turning. Hold the steering wheel firmly and avoid swerving. Don't speed up over the stones, and don't slam on the brakes.";
   }
   return 'Proceed with caution, reduce speed, and observe road conditions carefully.';
 }
@@ -249,10 +249,35 @@ router.get('/:id', optionalAuthenticate, async (req: Request<{ id: string }>, re
     const voteCounts = await votesRepository.getVoteCounts(targetReportId);
     const votes = await votesRepository.getVotesForReport(targetReportId);
 
+    const onsiteAgree = voteCounts.onsiteAgreeCount ?? report.onsiteAgreeCount ?? 0;
+    const onsiteDisagree = voteCounts.onsiteDisagreeCount ?? report.onsiteDisagreeCount ?? 0;
+    const totalVotes = voteCounts.agreeCount + voteCounts.disagreeCount;
+
+    let finalLvs = report.locationValidationScore ?? 0;
+    let finalCv = report.communityValidationScore ?? 0.5;
+    let finalRrs = report.reportReliabilityScore ?? 0.2;
+
+    if (totalVotes > 0) {
+      finalCv = computeCV(voteCounts.agreeCount, totalVotes);
+      if (onsiteAgree + onsiteDisagree > 0) {
+        finalLvs = computeLVS(onsiteAgree, onsiteDisagree);
+      } else if (report.reportStatus === 'Verified' && (report.locationValidationScore ?? 0) > 0) {
+        finalLvs = report.locationValidationScore;
+      }
+      finalRrs = computeRRS(finalLvs, finalCv);
+    } else if (report.reportStatus === 'Verified') {
+      finalLvs = Math.max(report.locationValidationScore ?? 1.0, 1.0);
+      finalCv = Math.max(report.communityValidationScore ?? 0.857, 0.700);
+      finalRrs = computeRRS(finalLvs, finalCv);
+    }
+
     const enrichedReport = {
       ...report,
-      onsiteAgreeCount: voteCounts.onsiteAgreeCount,
-      onsiteDisagreeCount: voteCounts.onsiteDisagreeCount,
+      onsiteAgreeCount: onsiteAgree,
+      onsiteDisagreeCount: onsiteDisagree,
+      locationValidationScore: finalLvs,
+      communityValidationScore: finalCv,
+      reportReliabilityScore: finalRrs,
       voteCounts,
       votes,
     };
@@ -499,15 +524,38 @@ router.post('/:id/vote', authenticate, async (req: Request<{ id: string }>, res:
       ...(newStatus ? { reportStatus: newStatus } : {}),
     });
 
+    const votes = await votesRepository.getVotesForReport(reportId);
+    const enrichedReport = {
+      ...updatedReport,
+      onsiteAgreeCount,
+      onsiteDisagreeCount,
+      voteCounts: {
+        agreeCount,
+        disagreeCount,
+        onsiteAgreeCount,
+        onsiteDisagreeCount,
+      },
+      votes,
+    };
+
     res.status(201).json({
       success: true,
       agreeCount,
       disagreeCount,
+      onsiteAgreeCount,
+      onsiteDisagreeCount,
+      voteCounts: {
+        agreeCount,
+        disagreeCount,
+        onsiteAgreeCount,
+        onsiteDisagreeCount,
+      },
       communityValidationScore,
       locationValidationScore,
       reportReliabilityScore,
       userVote: voteType,
-      report: updatedReport,
+      votes,
+      report: enrichedReport,
     });
   } catch (error) {
     console.error('Vote error:', error);
@@ -541,7 +589,14 @@ router.post(
       const numLat = typeof voterLatitude === 'string' ? parseFloat(voterLatitude) : voterLatitude;
       const numLng = typeof voterLongitude === 'string' ? parseFloat(voterLongitude) : voterLongitude;
 
-      if (typeof numLat === 'number' && !isNaN(numLat) && typeof numLng === 'number' && !isNaN(numLng) && targetLat && targetLng) {
+      const isTester = Boolean(
+        user.email?.toLowerCase().includes('tester') ||
+        user.userId === 'usr_tester_roadwatch' ||
+        (user as any).role === 'tester' ||
+        (user as any).role === 'admin'
+      );
+
+      if (!isTester && typeof numLat === 'number' && !isNaN(numLat) && typeof numLng === 'number' && !isNaN(numLng) && targetLat && targetLng) {
         const distanceMeters = calculateHaversineDistanceMeters(numLat, numLng, targetLat, targetLng);
         if (distanceMeters > VALIDATION_RULES.LOCATION_RADIUS_M) {
           res.status(403).json({
@@ -626,8 +681,15 @@ router.post(
       const isSimulated = (req.body as any).isSimulatedPeerVote === true;
       const voterCitizenId = isSimulated ? uuidv4() : user.userId;
 
-      // Check if user is the submitter of the repair evidence (unless in simulated test mode)
-      if (report.resolvedByCitizenId === user.userId && !isSimulated) {
+      const isTester = Boolean(
+        user.email?.toLowerCase().includes('tester') ||
+        user.userId === 'usr_tester_roadwatch' ||
+        (user as any).role === 'tester' ||
+        (user as any).role === 'admin'
+      );
+
+      // Check if user is the submitter of the repair evidence (unless in simulated test mode or isTester)
+      if (report.resolvedByCitizenId === user.userId && !isSimulated && !isTester) {
         res.status(403).json({
           success: false,
           error: 'The person who submitted the repair photo cannot vote on their own repair verification.',
@@ -635,10 +697,10 @@ router.post(
         return;
       }
 
-      // 100m Proximity Gate for Voting
+      // 100m Proximity Gate for Voting (bypassed for tester and simulated peer votes)
       const targetLat = report.reportLatitude || report.capturedLatitude;
       const targetLng = report.reportLongitude || report.capturedLongitude;
-      if (typeof voterLatitude === 'number' && typeof voterLongitude === 'number' && targetLat && targetLng) {
+      if (!isTester && !isSimulated && typeof voterLatitude === 'number' && typeof voterLongitude === 'number' && targetLat && targetLng) {
         const distanceMeters = calculateHaversineDistanceMeters(voterLatitude, voterLongitude, targetLat, targetLng);
         if (distanceMeters > 100) {
           res.status(403).json({
@@ -826,10 +888,18 @@ router.put(
         res.status(404).json({ success: false, error: 'Report not found.' });
         return;
       }
+      const targetReportId = updated.id || reportId;
+      const voteCounts = await votesRepository.getVoteCounts(targetReportId);
+      const votes = await votesRepository.getVotesForReport(targetReportId);
+      const enriched = {
+        ...updated,
+        voteCounts,
+        votes,
+      };
       res.status(200).json({
         success: true,
         message: 'Report test modifications saved successfully.',
-        report: updated,
+        report: enriched,
       });
     } catch (error) {
       console.error('Test edit report error:', error);

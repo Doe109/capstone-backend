@@ -23,9 +23,23 @@ function formatIsoTimestamp(val: any): string {
 function rowToReport(row: RowDataPacket): RoadReport {
   const agreeCount = Number(row.communityAgreeCount ?? 0);
   const disagreeCount = Number(row.communityDisagreeCount ?? 0);
+  const total = agreeCount + disagreeCount;
+  const cv = total > 0 ? computeCV(agreeCount, total) : Number(row.communityValidationScore ?? 0.5);
+
+  const onsiteAgree = row.onsiteAgreeCount !== undefined ? Number(row.onsiteAgreeCount) : 0;
+  const onsiteDisagree = row.onsiteDisagreeCount !== undefined ? Number(row.onsiteDisagreeCount) : 0;
+
+  const lvs = (onsiteAgree > 0 || onsiteDisagree > 0)
+    ? computeLVS(onsiteAgree, onsiteDisagree)
+    : Number(row.locationValidationScore ?? 0);
+
+  const rrs = (onsiteAgree > 0 || onsiteDisagree > 0 || total > 0)
+    ? computeRRS(lvs, cv)
+    : Number(row.reportReliabilityScore ?? 0.2);
 
   return {
     id: row.id,
+    reportNumber: row.reportNumber ? Number(row.reportNumber) : undefined,
     citizenId: row.citizenId,
     citizenName: row.citizenName,
     conditionType: row.conditionType,
@@ -47,18 +61,29 @@ function rowToReport(row: RowDataPacket): RoadReport {
     locationEvidenceStatus: row.locationEvidenceStatus,
     communityAgreeCount: agreeCount,
     communityDisagreeCount: disagreeCount,
-    communityValidationScore: Number(row.communityValidationScore ?? 0),
+    communityValidationScore: cv,
     // Aliases for the RN app
     confirmCount: agreeCount,
     disputeCount: disagreeCount,
-    locationValidationScore: Number(row.locationValidationScore ?? 0),
-    reportReliabilityScore: Number(row.reportReliabilityScore ?? 0),
+    locationValidationScore: lvs,
+    reportReliabilityScore: rrs,
+    onsiteAgreeCount: onsiteAgree,
+    onsiteDisagreeCount: onsiteDisagree,
+    voteCounts: {
+      agreeCount,
+      disagreeCount,
+      onsiteAgreeCount: onsiteAgree,
+      onsiteDisagreeCount: onsiteDisagree,
+    },
     advisoryText: row.advisoryText ?? null,
     resolvedAt: row.resolvedAt ? formatIsoTimestamp(row.resolvedAt) : null,
     resolutionPhotoUri: row.resolutionPhotoUri ?? null,
     resolvedByCitizenId: row.resolvedByCitizenId ?? null,
     repairAgreeCount: Number(row.repairAgreeCount ?? 0),
     repairDisagreeCount: Number(row.repairDisagreeCount ?? 0),
+    previousRepairAgreeCount: Number(row.previousRepairAgreeCount ?? 0),
+    previousRepairDisagreeCount: Number(row.previousRepairDisagreeCount ?? 0),
+    previousResolutionAttemptAt: row.previousResolutionAttemptAt ? formatIsoTimestamp(row.previousResolutionAttemptAt) : null,
   };
 }
 
@@ -92,17 +117,26 @@ export async function createReport(report: {
 }): Promise<RoadReport> {
   const pool = getPool();
   const severity = report.severityLevel || 'POOR';
+
+  let nextReportNumber = 1001;
+  try {
+    const [numRows] = await pool.query<RowDataPacket[]>('SELECT MAX(reportNumber) AS maxNum FROM reports');
+    if (numRows && numRows[0] && numRows[0].maxNum) {
+      nextReportNumber = Math.max(1001, Number(numRows[0].maxNum) + 1);
+    }
+  } catch {}
+
   await pool.query<ResultSetHeader>(
     `INSERT INTO reports
-       (id, citizenId, citizenName, conditionType, severityLevel, description,
+       (id, reportNumber, citizenId, citizenName, conditionType, severityLevel, description,
         photoUri, photoCapturedAt,
         capturedLatitude, capturedLongitude, locationAccuracyMeters,
         reportLatitude, reportLongitude, selectedBarangay,
         createdAt, updatedAt, submittedAt,
         reportStatus, syncStatus, locationEvidenceStatus)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Validation', 'synced', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Validation', 'synced', ?)`,
     [
-      report.id, report.citizenId, report.citizenName,
+      report.id, nextReportNumber, report.citizenId, report.citizenName,
       report.conditionType, severity, report.description,
       report.photoUri, report.photoCapturedAt,
       report.capturedLatitude, report.capturedLongitude, report.locationAccuracyMeters,
@@ -128,11 +162,11 @@ export async function createReport(report: {
 export async function evaluateExpiredPendingReports(): Promise<void> {
   const pool = getPool();
   try {
-    // 1. Expire unverified Pending Validation reports to Closed when exceeding 7 full days (Day 8+)
+    // 1. Expire unverified Pending Validation reports to Closed when exceeding 7 full days
     const [expiredRows] = await pool.query<RowDataPacket[]>(
       `SELECT selectedBarangay FROM reports 
        WHERE reportStatus = 'Pending Validation' 
-         AND createdAt < DATE_SUB(NOW(), INTERVAL 8 DAY)`
+         AND createdAt < DATE_SUB(NOW(), INTERVAL 7 DAY)`
     );
 
     await pool.query(
@@ -140,7 +174,7 @@ export async function evaluateExpiredPendingReports(): Promise<void> {
        SET reportStatus = 'Closed',
            updatedAt = NOW()
        WHERE reportStatus = 'Pending Validation' 
-         AND createdAt < DATE_SUB(NOW(), INTERVAL 8 DAY)`
+         AND createdAt < DATE_SUB(NOW(), INTERVAL 7 DAY)`
     );
 
     if (expiredRows && expiredRows.length > 0) {
@@ -191,11 +225,18 @@ export async function findReportById(id: string): Promise<RoadReport | null> {
   const pool = getPool();
   await evaluateExpiredPendingReports();
   const cleanId = (id || '').trim();
+  const numId = /^\d+$/.test(cleanId) ? parseInt(cleanId, 10) : null;
   const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT * FROM reports 
-     WHERE (id = ? OR id = ?)
+    `SELECT 
+       r.*,
+       COALESCE(SUM(CASE WHEN v.voteType = 'agree' AND v.distanceMeters IS NOT NULL AND v.distanceMeters <= 30 THEN 1 ELSE 0 END), 0) AS onsiteAgreeCount,
+       COALESCE(SUM(CASE WHEN v.voteType = 'disagree' AND v.distanceMeters IS NOT NULL AND v.distanceMeters <= 30 THEN 1 ELSE 0 END), 0) AS onsiteDisagreeCount
+     FROM reports r
+     LEFT JOIN community_votes v ON v.reportId = r.id
+     WHERE (r.id = ? OR r.id = ? OR r.reportNumber = ?)
+     GROUP BY r.id
      LIMIT 1`,
-    [cleanId, id],
+    [cleanId, id, numId],
   );
   if (rows.length === 0) return null;
   return rowToReport(rows[0]);
@@ -207,27 +248,34 @@ export async function findReportById(id: string): Promise<RoadReport | null> {
 export async function listReports(filters?: ReportFilters): Promise<RoadReport[]> {
   const pool = getPool();
   await evaluateExpiredPendingReports();
-  let sql = 'SELECT * FROM reports';
+  let sql = `
+    SELECT 
+      r.*,
+      COALESCE(SUM(CASE WHEN v.voteType = 'agree' AND v.distanceMeters IS NOT NULL AND v.distanceMeters <= 30 THEN 1 ELSE 0 END), 0) AS onsiteAgreeCount,
+      COALESCE(SUM(CASE WHEN v.voteType = 'disagree' AND v.distanceMeters IS NOT NULL AND v.distanceMeters <= 30 THEN 1 ELSE 0 END), 0) AS onsiteDisagreeCount
+    FROM reports r
+    LEFT JOIN community_votes v ON v.reportId = r.id
+  `;
   const params: unknown[] = [];
   const clauses: string[] = [];
 
   if (filters?.status) {
-    clauses.push('reportStatus = ?');
+    clauses.push('r.reportStatus = ?');
     params.push(filters.status);
   }
   if (filters?.barangay) {
-    clauses.push('selectedBarangay = ?');
+    clauses.push('r.selectedBarangay = ?');
     params.push(filters.barangay);
   }
   if (filters?.citizenId) {
-    clauses.push('citizenId = ?');
+    clauses.push('r.citizenId = ?');
     params.push(filters.citizenId);
   }
 
   if (clauses.length > 0) {
     sql += ' WHERE ' + clauses.join(' AND ');
   }
-  sql += ' ORDER BY createdAt DESC';
+  sql += ' GROUP BY r.id ORDER BY r.createdAt DESC';
 
   const [rows] = await pool.query<RowDataPacket[]>(sql, params);
   return rows.map(rowToReport);
@@ -400,6 +448,10 @@ export async function getUserRepairVote(
 export async function revertRepairToVerified(reportId: string): Promise<RoadReport | null> {
   const pool = getPool();
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const current = await findReportById(reportId);
+  const prevAgree = current?.repairAgreeCount ?? 0;
+  const prevDisagree = current?.repairDisagreeCount ?? 0;
+
   try {
     await pool.query(`DELETE FROM repair_votes WHERE reportId = ?`, [reportId]);
   } catch (e) {
@@ -408,13 +460,16 @@ export async function revertRepairToVerified(reportId: string): Promise<RoadRepo
   await pool.query<ResultSetHeader>(
     `UPDATE reports 
      SET reportStatus = 'Verified', 
+         previousRepairAgreeCount = ?,
+         previousRepairDisagreeCount = ?,
+         previousResolutionAttemptAt = ?,
          resolutionPhotoUri = NULL, 
          resolvedByCitizenId = NULL, 
          repairAgreeCount = 0, 
          repairDisagreeCount = 0, 
          updatedAt = ? 
      WHERE id = ?`,
-    [now, reportId]
+    [prevAgree, prevDisagree, now, now, reportId]
   );
   return findReportById(reportId);
 }
@@ -454,11 +509,11 @@ export async function setReportAgeDays(reportId: string, daysAgo: number): Promi
   if (!report) return null;
 
   if (daysAgo === 7) {
-    // 'Ni Tung-Tung sa 7 Days': 7 full days old, active in Pending Validation (last day of window)
+    // 5 minutes before 7 days end: (7 * 1440 - 5) = 10075 minutes ago, leaving 5 minutes of voting time
     await pool.query<ResultSetHeader>(
       `UPDATE reports 
-       SET createdAt = DATE_SUB(NOW(), INTERVAL 7 DAY),
-           photoCapturedAt = DATE_SUB(NOW(), INTERVAL 7 DAY),
+       SET createdAt = DATE_SUB(NOW(), INTERVAL 10075 MINUTE),
+           photoCapturedAt = DATE_SUB(NOW(), INTERVAL 10075 MINUTE),
            reportStatus = 'Pending Validation',
            updatedAt = NOW()
        WHERE id = ?`,
@@ -576,6 +631,10 @@ export async function testEditReport(
     selectedBarangay?: string;
     createdAt?: string;
     photoCapturedAt?: string;
+    resolvedAt?: string | null;
+    previousRepairAgreeCount?: number;
+    previousRepairDisagreeCount?: number;
+    previousResolutionAttemptAt?: string | null;
   }
 ): Promise<RoadReport | null> {
   const pool = getPool();
@@ -584,11 +643,34 @@ export async function testEditReport(
 
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
   const voteCounts = await votesRepository.getVoteCounts(reportId);
-  const agree = updates.communityAgreeCount ?? report.communityAgreeCount;
-  const disagree = updates.communityDisagreeCount ?? report.communityDisagreeCount;
+  const agree = updates.communityAgreeCount !== undefined ? Number(updates.communityAgreeCount) : report.communityAgreeCount;
+  const disagree = updates.communityDisagreeCount !== undefined ? Number(updates.communityDisagreeCount) : report.communityDisagreeCount;
   const total = agree + disagree;
   const communityValidationScore = computeCV(agree, total);
-  const locationValidationScore = computeLVS(voteCounts.onsiteAgreeCount, voteCounts.onsiteDisagreeCount);
+
+  let onsiteAgree = voteCounts.onsiteAgreeCount;
+  let onsiteDisagree = voteCounts.onsiteDisagreeCount;
+
+  if (agree > 0 && onsiteAgree === 0 && (updates.communityAgreeCount !== undefined || updates.reportStatus === 'Verified')) {
+    onsiteAgree = Math.min(agree, 2);
+    try {
+      const votes = await votesRepository.getVotesForReport(reportId);
+      if (votes.length === 0) {
+        for (let i = 0; i < agree; i++) {
+          await pool.query(
+            `INSERT INTO community_votes (id, reportId, citizenId, voteType, votedAt, distanceMeters)
+             VALUES (?, ?, ?, 'agree', NOW(), ?)`,
+            [`vote_test_${Date.now()}_${i}`, reportId, `peer_tester_${i + 1}`, i < onsiteAgree ? 15 : 45]
+          );
+        }
+      }
+    } catch {}
+  }
+  if (disagree > agree && onsiteDisagree === 0 && updates.communityDisagreeCount !== undefined) {
+    onsiteDisagree = Math.min(disagree, 2);
+  }
+
+  const locationValidationScore = computeLVS(onsiteAgree, onsiteDisagree);
   const reportReliabilityScore = computeRRS(locationValidationScore, communityValidationScore);
 
   const lat = updates.reportLatitude ?? updates.capturedLatitude ?? null;
@@ -600,6 +682,12 @@ export async function testEditReport(
   const formattedCapturedAt = updates.photoCapturedAt
     ? new Date(updates.photoCapturedAt).toISOString().slice(0, 19).replace('T', ' ')
     : null;
+  const formattedResolvedAt = updates.resolvedAt
+    ? new Date(updates.resolvedAt).toISOString().slice(0, 19).replace('T', ' ')
+    : updates.resolvedAt === null
+    ? null
+    : (updates.reportStatus === 'Resolved' && !report.resolvedAt ? now : null);
+  const shouldUpdateResolvedAt = updates.resolvedAt !== undefined || (updates.reportStatus === 'Resolved' && !report.resolvedAt);
 
   await pool.query<ResultSetHeader>(
     `UPDATE reports 
@@ -619,9 +707,13 @@ export async function testEditReport(
          reportReliabilityScore = ?,
          repairAgreeCount = COALESCE(?, repairAgreeCount),
          repairDisagreeCount = COALESCE(?, repairDisagreeCount),
+         previousRepairAgreeCount = COALESCE(?, previousRepairAgreeCount),
+         previousRepairDisagreeCount = COALESCE(?, previousRepairDisagreeCount),
+         previousResolutionAttemptAt = CASE WHEN ? = 1 THEN ? ELSE previousResolutionAttemptAt END,
          reportStatus = COALESCE(?, reportStatus),
          createdAt = COALESCE(?, createdAt),
          photoCapturedAt = COALESCE(?, photoCapturedAt),
+         resolvedAt = CASE WHEN ? = 1 THEN ? ELSE resolvedAt END,
          updatedAt = ?
      WHERE id = ?`,
     [
@@ -641,9 +733,15 @@ export async function testEditReport(
       reportReliabilityScore,
       updates.repairAgreeCount ?? null,
       updates.repairDisagreeCount ?? null,
+      updates.previousRepairAgreeCount ?? null,
+      updates.previousRepairDisagreeCount ?? null,
+      updates.previousResolutionAttemptAt !== undefined ? 1 : 0,
+      updates.previousResolutionAttemptAt ? new Date(updates.previousResolutionAttemptAt).toISOString().slice(0, 19).replace('T', ' ') : null,
       updates.reportStatus ?? null,
       formattedCreatedAt,
       formattedCapturedAt,
+      shouldUpdateResolvedAt ? 1 : 0,
+      formattedResolvedAt,
       now,
       reportId,
     ]

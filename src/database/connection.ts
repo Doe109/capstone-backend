@@ -83,6 +83,16 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       console.log('✅ Added missing repairAgreeCount & repairDisagreeCount columns to reports table');
     }
 
+    // 4b. Add previousRepairAgreeCount, previousRepairDisagreeCount, previousResolutionAttemptAt if missing
+    const [prevRepairCols] = (await db.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'reports' AND COLUMN_NAME = 'previousRepairAgreeCount'`,
+      [dbName]
+    )) as any;
+    if (prevRepairCols.length === 0) {
+      await db.query(`ALTER TABLE reports ADD COLUMN previousRepairAgreeCount INT DEFAULT 0, ADD COLUMN previousRepairDisagreeCount INT DEFAULT 0, ADD COLUMN previousResolutionAttemptAt DATETIME NULL`);
+      console.log('✅ Added missing previousRepairAgreeCount, previousRepairDisagreeCount, & previousResolutionAttemptAt columns to reports table');
+    }
+
     // 5. Create repair_votes table if missing
     await db.query(`
       CREATE TABLE IF NOT EXISTS repair_votes (
@@ -157,6 +167,23 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       }
     } catch (dispErr) {
       console.warn('Notice migrating Disputed reports:', dispErr);
+    }
+
+    // 12. Add reportNumber INT UNIQUE NULL column if missing, and initialize sequentially from 1001
+    const [reportNumCols] = (await db.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'reports' AND COLUMN_NAME = 'reportNumber'`,
+      [dbName]
+    )) as any;
+    if (reportNumCols.length === 0) {
+      await db.query(`ALTER TABLE reports ADD COLUMN reportNumber INT UNIQUE NULL`);
+      // Chronologically number existing reports starting at 1001
+      const [existingReports] = (await db.query(`SELECT id FROM reports ORDER BY createdAt ASC`)) as any;
+      if (Array.isArray(existingReports) && existingReports.length > 0) {
+        for (let i = 0; i < existingReports.length; i++) {
+          await db.query(`UPDATE reports SET reportNumber = ? WHERE id = ?`, [1001 + i, existingReports[i].id]);
+        }
+      }
+      console.log('✅ Added missing reportNumber column to reports table and backfilled sequential IDs');
     }
 
     // 9. Ensure research and demo test accounts exist
