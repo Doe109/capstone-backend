@@ -67,6 +67,7 @@ export interface RoadReport {
   previousRepairAgreeCount?: number;
   previousRepairDisagreeCount?: number;
   previousResolutionAttemptAt?: string | null;
+  resolutionHistory?: ResolutionAttempt[];
   userRepairVote?: VoteType | null;
 
   // Backend-specific DSS scores
@@ -125,6 +126,16 @@ export interface CitizenDashboardStats {
   pendingValidation: number;
   verified: number;
   savedOffline: number;
+}
+
+export interface ResolutionAttempt {
+  attemptNumber: number;
+  evaluatedAt: string;
+  agreeCount: number;
+  disagreeCount: number;
+  totalVotes: number;
+  result: 'Claim Rejected' | 'Claim Approved';
+  note?: string;
 }
 
 export interface ResolutionResult {

@@ -93,6 +93,16 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       console.log('✅ Added missing previousRepairAgreeCount, previousRepairDisagreeCount, & previousResolutionAttemptAt columns to reports table');
     }
 
+    // 4c. Add resolutionHistory JSON/TEXT column if missing
+    const [resHistoryCols] = (await db.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'reports' AND COLUMN_NAME = 'resolutionHistory'`,
+      [dbName]
+    )) as any;
+    if (resHistoryCols.length === 0) {
+      await db.query(`ALTER TABLE reports ADD COLUMN resolutionHistory JSON NULL`);
+      console.log('✅ Added missing resolutionHistory column to reports table');
+    }
+
     // 5. Create repair_votes table if missing
     await db.query(`
       CREATE TABLE IF NOT EXISTS repair_votes (

@@ -84,6 +84,15 @@ function rowToReport(row: RowDataPacket): RoadReport {
     previousRepairAgreeCount: Number(row.previousRepairAgreeCount ?? 0),
     previousRepairDisagreeCount: Number(row.previousRepairDisagreeCount ?? 0),
     previousResolutionAttemptAt: row.previousResolutionAttemptAt ? formatIsoTimestamp(row.previousResolutionAttemptAt) : null,
+    resolutionHistory: (() => {
+      try {
+        if (row.resolutionHistory) {
+          const parsed = typeof row.resolutionHistory === 'string' ? JSON.parse(row.resolutionHistory) : row.resolutionHistory;
+          return Array.isArray(parsed) ? parsed : [];
+        }
+      } catch {}
+      return [];
+    })(),
   };
 }
 
@@ -452,6 +461,22 @@ export async function revertRepairToVerified(reportId: string): Promise<RoadRepo
   const prevAgree = current?.repairAgreeCount ?? 0;
   const prevDisagree = current?.repairDisagreeCount ?? 0;
 
+  let history: any[] = [];
+  try {
+    if (current?.resolutionHistory) {
+      history = typeof current.resolutionHistory === 'string' ? JSON.parse(current.resolutionHistory) : current.resolutionHistory;
+    }
+  } catch {}
+  if (!Array.isArray(history)) history = [];
+  history.push({
+    attemptNumber: history.length + 1,
+    evaluatedAt: now,
+    agreeCount: prevAgree,
+    disagreeCount: prevDisagree,
+    totalVotes: prevAgree + prevDisagree,
+    result: 'Claim Rejected',
+  });
+
   try {
     await pool.query(`DELETE FROM repair_votes WHERE reportId = ?`, [reportId]);
   } catch (e) {
@@ -463,13 +488,14 @@ export async function revertRepairToVerified(reportId: string): Promise<RoadRepo
          previousRepairAgreeCount = ?,
          previousRepairDisagreeCount = ?,
          previousResolutionAttemptAt = ?,
+         resolutionHistory = ?,
          resolutionPhotoUri = NULL, 
          resolvedByCitizenId = NULL, 
          repairAgreeCount = 0, 
          repairDisagreeCount = 0, 
          updatedAt = ? 
      WHERE id = ?`,
-    [prevAgree, prevDisagree, now, now, reportId]
+    [prevAgree, prevDisagree, now, JSON.stringify(history), now, reportId]
   );
   return findReportById(reportId);
 }
@@ -635,6 +661,7 @@ export async function testEditReport(
     previousRepairAgreeCount?: number;
     previousRepairDisagreeCount?: number;
     previousResolutionAttemptAt?: string | null;
+    resolutionHistory?: any[];
   }
 ): Promise<RoadReport | null> {
   const pool = getPool();
@@ -710,6 +737,7 @@ export async function testEditReport(
          previousRepairAgreeCount = COALESCE(?, previousRepairAgreeCount),
          previousRepairDisagreeCount = COALESCE(?, previousRepairDisagreeCount),
          previousResolutionAttemptAt = CASE WHEN ? = 1 THEN ? ELSE previousResolutionAttemptAt END,
+         resolutionHistory = CASE WHEN ? = 1 THEN ? ELSE resolutionHistory END,
          reportStatus = COALESCE(?, reportStatus),
          createdAt = COALESCE(?, createdAt),
          photoCapturedAt = COALESCE(?, photoCapturedAt),
@@ -737,6 +765,8 @@ export async function testEditReport(
       updates.previousRepairDisagreeCount ?? null,
       updates.previousResolutionAttemptAt !== undefined ? 1 : 0,
       updates.previousResolutionAttemptAt ? new Date(updates.previousResolutionAttemptAt).toISOString().slice(0, 19).replace('T', ' ') : null,
+      updates.resolutionHistory !== undefined ? 1 : 0,
+      updates.resolutionHistory ? JSON.stringify(updates.resolutionHistory) : null,
       updates.reportStatus ?? null,
       formattedCreatedAt,
       formattedCapturedAt,
