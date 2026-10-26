@@ -196,6 +196,24 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       console.log('✅ Added missing reportNumber column to reports table and backfilled sequential IDs');
     }
 
+    // 12b. Ensure any existing reports with NULL reportNumber are assigned permanent numbers
+    try {
+      const [nullReports] = (await db.query(
+        `SELECT id FROM reports WHERE reportNumber IS NULL ORDER BY createdAt ASC`
+      )) as any;
+      if (Array.isArray(nullReports) && nullReports.length > 0) {
+        const [maxRows] = (await db.query(`SELECT MAX(reportNumber) as maxNum FROM reports`)) as any;
+        let nextNum = Math.max(1001, (Number(maxRows?.[0]?.maxNum) || 1000) + 1);
+        for (const r of nullReports) {
+          await db.query(`UPDATE reports SET reportNumber = ? WHERE id = ?`, [nextNum, r.id]);
+          console.log(`[Schema] Backfilled report ${r.id} with permanent reportNumber ${nextNum}`);
+          nextNum++;
+        }
+      }
+    } catch (backfillErr) {
+      console.warn('Notice backfilling reportNumber:', backfillErr);
+    }
+
     // 9. Ensure research and demo test accounts exist
     try {
       const bcrypt = require('bcrypt');

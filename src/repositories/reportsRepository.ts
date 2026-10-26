@@ -234,7 +234,8 @@ export async function findReportById(id: string): Promise<RoadReport | null> {
   const pool = getPool();
   await evaluateExpiredPendingReports();
   const cleanId = (id || '').trim();
-  const numId = /^\d+$/.test(cleanId) ? parseInt(cleanId, 10) : null;
+  const cleanNumStr = cleanId.replace(/^RW-/i, '').replace(/^#/, '').trim();
+  const numId = /^\d+$/.test(cleanNumStr) ? parseInt(cleanNumStr, 10) : null;
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT 
        r.*,
