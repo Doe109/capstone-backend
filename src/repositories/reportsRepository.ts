@@ -214,11 +214,13 @@ export async function evaluateExpiredPendingReports(): Promise<void> {
             await advisoriesRepository.deactivateByBarangay(rep.selectedBarangay).catch(() => {});
           }
         } else {
-          // Revert back to Verified
-          await pool.query(
-            `UPDATE reports SET reportStatus = 'Verified', resolutionPhotoUri = NULL, updatedAt = NOW() WHERE id = ?`,
-            [rep.id]
-          );
+          // Revert back to Verified with full resolutionHistory preservation
+          const reason = (agree + disagree === 0)
+            ? 'No votes'
+            : agree < 5 && agree >= disagree
+            ? 'Fewer than five votes'
+            : 'Claim Rejected';
+          await revertRepairToVerified(rep.id, reason);
         }
       }
     }
@@ -455,7 +457,7 @@ export async function getUserRepairVote(
 /**
  * Revert a repair claim back to 'Verified' (Active Hazard) when community votes 'Still Damaged'.
  */
-export async function revertRepairToVerified(reportId: string): Promise<RoadReport | null> {
+export async function revertRepairToVerified(reportId: string, customResult?: string): Promise<RoadReport | null> {
   const pool = getPool();
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
   const current = await findReportById(reportId);
@@ -469,13 +471,22 @@ export async function revertRepairToVerified(reportId: string): Promise<RoadRepo
     }
   } catch {}
   if (!Array.isArray(history)) history = [];
+
+  const verdict = customResult || (
+    prevAgree + prevDisagree === 0
+      ? 'No votes'
+      : (prevAgree < 5 && prevAgree >= prevDisagree)
+      ? 'Fewer than five votes'
+      : 'Claim Rejected'
+  );
+
   history.push({
     attemptNumber: history.length + 1,
     evaluatedAt: now,
     agreeCount: prevAgree,
     disagreeCount: prevDisagree,
     totalVotes: prevAgree + prevDisagree,
-    result: 'Claim Rejected',
+    result: verdict,
   });
 
   try {
@@ -537,16 +548,39 @@ export async function setReportAgeDays(reportId: string, daysAgo: number): Promi
 
   if (daysAgo === 7) {
     // 5 minutes before 7 days end: (7 * 1440 - 5) = 10075 minutes ago, leaving 5 minutes of voting time
-    await pool.query<ResultSetHeader>(
-      `UPDATE reports 
-       SET createdAt = DATE_SUB(NOW(), INTERVAL 10075 MINUTE),
-           photoCapturedAt = DATE_SUB(NOW(), INTERVAL 10075 MINUTE),
-           reportStatus = 'Pending Validation',
-           updatedAt = NOW()
-       WHERE id = ?`,
-      [reportId]
-    );
+    if (report.reportStatus === 'Under Review') {
+      await pool.query<ResultSetHeader>(
+        `UPDATE reports 
+         SET updatedAt = DATE_SUB(NOW(), INTERVAL 10075 MINUTE)
+         WHERE id = ?`,
+        [reportId]
+      );
+    } else {
+      await pool.query<ResultSetHeader>(
+        `UPDATE reports 
+         SET createdAt = DATE_SUB(NOW(), INTERVAL 10075 MINUTE),
+             photoCapturedAt = DATE_SUB(NOW(), INTERVAL 10075 MINUTE),
+             reportStatus = 'Pending Validation',
+             updatedAt = NOW()
+         WHERE id = ?`,
+        [reportId]
+      );
+    }
   } else if (daysAgo >= 8) {
+    if (report.reportStatus === 'Under Review') {
+      const agree = Number(report.repairAgreeCount || 0);
+      const disagree = Number(report.repairDisagreeCount || 0);
+      if (agree >= 5 && agree > disagree) {
+        return resolveReport(reportId);
+      } else {
+        const reason = (agree + disagree === 0)
+          ? 'No votes'
+          : (agree < 5 && agree >= disagree)
+          ? 'Fewer than five votes'
+          : 'Claim Rejected';
+        return revertRepairToVerified(reportId, reason);
+      }
+    }
     // 'Ni Lapas sa 7 Days': 8+ days old. If community quorum not reached, transition to Closed
     const agree = Number(report.communityAgreeCount || 0);
     const disagree = Number(report.communityDisagreeCount || 0);
@@ -570,20 +604,20 @@ export async function setReportAgeDays(reportId: string, daysAgo: number): Promi
       `UPDATE reports 
        SET createdAt = NOW(),
            photoCapturedAt = NOW(),
-           reportStatus = 'Pending Validation',
+           reportStatus = ?,
            updatedAt = NOW()
        WHERE id = ?`,
-      [reportId]
+      [report.reportStatus === 'Under Review' ? 'Under Review' : 'Pending Validation', reportId]
     );
   } else {
     await pool.query<ResultSetHeader>(
       `UPDATE reports 
        SET createdAt = DATE_SUB(NOW(), INTERVAL ? DAY),
            photoCapturedAt = DATE_SUB(NOW(), INTERVAL ? DAY),
-           reportStatus = 'Pending Validation',
+           reportStatus = ?,
            updatedAt = NOW()
        WHERE id = ?`,
-      [daysAgo, daysAgo, reportId]
+      [daysAgo, daysAgo, report.reportStatus === 'Under Review' ? 'Under Review' : 'Pending Validation', reportId]
     );
   }
 

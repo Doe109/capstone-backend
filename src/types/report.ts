@@ -134,7 +134,7 @@ export interface ResolutionAttempt {
   agreeCount: number;
   disagreeCount: number;
   totalVotes: number;
-  result: 'Claim Rejected' | 'Claim Approved';
+  result: 'Claim Rejected' | 'Claim Approved' | 'Fewer than five votes' | 'No votes' | string;
   note?: string;
 }
 
