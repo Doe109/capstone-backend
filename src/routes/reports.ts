@@ -575,7 +575,7 @@ router.post(
       const reportId = decodeURIComponent(rawId || '').trim();
       const user = req.user!;
       const file = req.file;
-      const { voterLatitude, voterLongitude } = req.body;
+      const { voterLatitude, voterLongitude, repairPhotoDistanceMeters } = req.body;
 
       const report = await reportsRepository.findReportById(reportId);
       if (!report) {
@@ -589,22 +589,36 @@ router.post(
       const numLat = typeof voterLatitude === 'string' ? parseFloat(voterLatitude) : voterLatitude;
       const numLng = typeof voterLongitude === 'string' ? parseFloat(voterLongitude) : voterLongitude;
 
+      // Note: ONLY the Master Test Account can bypass the 30m proximity gate!
       const isTester = Boolean(
-        user.email?.toLowerCase().includes('tester') ||
-        user.userId === 'usr_tester_roadwatch' ||
-        (user as any).role === 'tester' ||
-        (user as any).role === 'admin'
+        user.email?.toLowerCase() === 'tester@roadwatch.ph' ||
+        user.userId === 'usr_tester_roadwatch'
       );
 
-      if (!isTester && typeof numLat === 'number' && !isNaN(numLat) && typeof numLng === 'number' && !isNaN(numLng) && targetLat && targetLng) {
-        const distanceMeters = calculateHaversineDistanceMeters(numLat, numLng, targetLat, targetLng);
-        if (distanceMeters > VALIDATION_RULES.LOCATION_RADIUS_M) {
+      let calculatedDist: number | null = null;
+      if (typeof numLat === 'number' && !isNaN(numLat) && typeof numLng === 'number' && !isNaN(numLng) && targetLat && targetLng) {
+        calculatedDist = Math.round(calculateHaversineDistanceMeters(numLat, numLng, targetLat, targetLng));
+        if (!isTester && calculatedDist > VALIDATION_RULES.LOCATION_RADIUS_M) {
           res.status(403).json({
             success: false,
-            error: `Capturing repair evidence is only permitted within 30 meters of the road condition (you are currently ${Math.round(distanceMeters)}m away).`,
+            error: `Capturing repair evidence is only permitted within 30 meters of the road condition (you are currently ${calculatedDist}m away).`,
           });
           return;
         }
+      }
+
+      let finalDistanceMeters: number | null = null;
+      if (typeof repairPhotoDistanceMeters !== 'undefined' && repairPhotoDistanceMeters !== null) {
+        const parsed = typeof repairPhotoDistanceMeters === 'string' ? parseFloat(repairPhotoDistanceMeters) : repairPhotoDistanceMeters;
+        if (!isNaN(parsed)) {
+          finalDistanceMeters = Math.round(parsed);
+        }
+      }
+      if (finalDistanceMeters === null) {
+        finalDistanceMeters = calculatedDist;
+      }
+      if (finalDistanceMeters === null && isTester) {
+        finalDistanceMeters = 0; // Master tester bypass fallback
       }
 
       if (!file) {
@@ -617,8 +631,13 @@ router.post(
       }
       const resolutionPhotoUri = `/uploads/${file.filename}`;
 
-      // Mark report as 'Under Review' and store submitter's repair proof
-      const updatedReport = await reportsRepository.submitRepairProof(reportId, resolutionPhotoUri, user.userId);
+      // Mark report as 'Under Review' and store submitter's repair proof and actual distance
+      const updatedReport = await reportsRepository.submitRepairProof(
+        reportId,
+        resolutionPhotoUri,
+        user.userId,
+        finalDistanceMeters
+      );
 
       // Trigger automatic push notification alert to all barangay citizens for review
       sendRepairUnderReviewNotification({

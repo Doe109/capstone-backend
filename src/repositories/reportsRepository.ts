@@ -370,7 +370,8 @@ export async function updateReportScores(
 export async function submitRepairProof(
   reportId: string,
   resolutionPhotoUri: string,
-  resolvedByCitizenId: string
+  resolvedByCitizenId: string,
+  repairPhotoDistanceMeters?: number | null
 ): Promise<RoadReport | null> {
   const pool = getPool();
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -388,11 +389,12 @@ export async function submitRepairProof(
      SET reportStatus = 'Under Review', 
          resolutionPhotoUri = ?, 
          resolvedByCitizenId = ?, 
+         repairPhotoDistanceMeters = ?,
          repairAgreeCount = 0, 
          repairDisagreeCount = 0, 
          updatedAt = ? 
      WHERE id = ?`,
-    [resolutionPhotoUri, resolvedByCitizenId, now, reportId]
+    [resolutionPhotoUri, resolvedByCitizenId, repairPhotoDistanceMeters !== undefined ? repairPhotoDistanceMeters : null, now, reportId]
   );
   return findReportById(reportId);
 }
