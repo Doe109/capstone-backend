@@ -214,6 +214,36 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       console.warn('Notice backfilling reportNumber:', backfillErr);
     }
 
+    // 13. Add verifiedAt column to reports if missing
+    try {
+      const [verifiedCols] = (await db.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'reports' AND COLUMN_NAME = 'verifiedAt'`,
+        [dbName]
+      )) as any;
+      if (verifiedCols.length === 0) {
+        await db.query(`ALTER TABLE reports ADD COLUMN verifiedAt DATETIME NULL`);
+        await db.query(`UPDATE reports SET verifiedAt = updatedAt WHERE reportStatus IN ('Verified', 'Under Review', 'Resolved') AND verifiedAt IS NULL`);
+        console.log('✅ Added missing verifiedAt column to reports table');
+      }
+    } catch (verColErr) {
+      console.warn('Notice adding verifiedAt column:', verColErr);
+    }
+
+    // 14. Add closedAt column to reports if missing
+    try {
+      const [closedCols] = (await db.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'reports' AND COLUMN_NAME = 'closedAt'`,
+        [dbName]
+      )) as any;
+      if (closedCols.length === 0) {
+        await db.query(`ALTER TABLE reports ADD COLUMN closedAt DATETIME NULL`);
+        await db.query(`UPDATE reports SET closedAt = COALESCE(DATE_ADD(createdAt, INTERVAL 7 DAY), updatedAt) WHERE reportStatus = 'Closed' AND closedAt IS NULL`);
+        console.log('✅ Added missing closedAt column to reports table');
+      }
+    } catch (closedColErr) {
+      console.warn('Notice adding closedAt column:', closedColErr);
+    }
+
     // 9. Ensure research and demo test accounts exist
     try {
       const bcrypt = require('bcrypt');

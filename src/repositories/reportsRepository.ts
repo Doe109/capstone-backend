@@ -76,7 +76,9 @@ function rowToReport(row: RowDataPacket): RoadReport {
       onsiteDisagreeCount: onsiteDisagree,
     },
     advisoryText: row.advisoryText ?? null,
+    verifiedAt: row.verifiedAt ? formatIsoTimestamp(row.verifiedAt) : null,
     resolvedAt: row.resolvedAt ? formatIsoTimestamp(row.resolvedAt) : null,
+    closedAt: row.closedAt ? formatIsoTimestamp(row.closedAt) : null,
     resolutionPhotoUri: row.resolutionPhotoUri ?? null,
     resolvedByCitizenId: row.resolvedByCitizenId ?? null,
     repairAgreeCount: Number(row.repairAgreeCount ?? 0),
@@ -181,6 +183,7 @@ export async function evaluateExpiredPendingReports(): Promise<void> {
     await pool.query(
       `UPDATE reports 
        SET reportStatus = 'Closed',
+           closedAt = COALESCE(closedAt, DATE_ADD(createdAt, INTERVAL 7 DAY)),
            updatedAt = NOW()
        WHERE reportStatus = 'Pending Validation' 
          AND createdAt < DATE_SUB(NOW(), INTERVAL 7 DAY)`
@@ -340,8 +343,12 @@ export async function updateReportScores(
   }
   if (scores.reportStatus) {
     updates.reportStatus = scores.reportStatus;
-    if (scores.reportStatus === 'Resolved') {
+    if (scores.reportStatus === 'Verified') {
+      updates.verifiedAt = now;
+    } else if (scores.reportStatus === 'Resolved') {
       updates.resolvedAt = now;
+    } else if (scores.reportStatus === 'Closed') {
+      updates.closedAt = now;
     }
   }
 
@@ -586,28 +593,33 @@ export async function setReportAgeDays(reportId: string, daysAgo: number): Promi
     const disagree = Number(report.communityDisagreeCount || 0);
     const total = agree + disagree;
     const finalStatus = total >= 5 && agree > disagree ? 'Verified' : 'Closed';
+    const nowIso = new Date().toISOString().slice(0, 19).replace('T', ' ');
     await pool.query<ResultSetHeader>(
       `UPDATE reports 
        SET createdAt = DATE_SUB(NOW(), INTERVAL ? DAY),
            photoCapturedAt = DATE_SUB(NOW(), INTERVAL ? DAY),
            reportStatus = ?,
+           verifiedAt = CASE WHEN ? = 'Verified' THEN COALESCE(verifiedAt, ?) ELSE verifiedAt END,
+           closedAt = CASE WHEN ? = 'Closed' THEN COALESCE(closedAt, ?) ELSE closedAt END,
            updatedAt = NOW()
        WHERE id = ?`,
-      [daysAgo, daysAgo, finalStatus, reportId]
+      [daysAgo, daysAgo, finalStatus, finalStatus, nowIso, finalStatus, nowIso, reportId]
     );
     if (finalStatus === 'Closed' && report.selectedBarangay) {
       await advisoriesRepository.deactivateByBarangay(report.selectedBarangay).catch(() => {});
     }
   } else if (daysAgo === 0) {
     // Fresh report (Just Now / Today)
+    const freshStatus = report.reportStatus === 'Under Review' ? 'Under Review' : 'Pending Validation';
     await pool.query<ResultSetHeader>(
       `UPDATE reports 
        SET createdAt = NOW(),
            photoCapturedAt = NOW(),
            reportStatus = ?,
+           closedAt = NULL,
            updatedAt = NOW()
        WHERE id = ?`,
-      [report.reportStatus === 'Under Review' ? 'Under Review' : 'Pending Validation', reportId]
+      [freshStatus, reportId]
     );
   } else {
     await pool.query<ResultSetHeader>(
@@ -692,7 +704,9 @@ export async function testEditReport(
     selectedBarangay?: string;
     createdAt?: string;
     photoCapturedAt?: string;
+    verifiedAt?: string | null;
     resolvedAt?: string | null;
+    closedAt?: string | null;
     previousRepairAgreeCount?: number;
     previousRepairDisagreeCount?: number;
     previousResolutionAttemptAt?: string | null;
@@ -744,12 +758,24 @@ export async function testEditReport(
   const formattedCapturedAt = updates.photoCapturedAt
     ? new Date(updates.photoCapturedAt).toISOString().slice(0, 19).replace('T', ' ')
     : null;
+  const formattedVerifiedAt = updates.verifiedAt
+    ? new Date(updates.verifiedAt).toISOString().slice(0, 19).replace('T', ' ')
+    : updates.verifiedAt === null
+    ? null
+    : (updates.reportStatus === 'Verified' && !report.verifiedAt ? now : null);
+  const shouldUpdateVerifiedAt = updates.verifiedAt !== undefined || (updates.reportStatus === 'Verified' && !report.verifiedAt);
   const formattedResolvedAt = updates.resolvedAt
     ? new Date(updates.resolvedAt).toISOString().slice(0, 19).replace('T', ' ')
     : updates.resolvedAt === null
     ? null
     : (updates.reportStatus === 'Resolved' && !report.resolvedAt ? now : null);
   const shouldUpdateResolvedAt = updates.resolvedAt !== undefined || (updates.reportStatus === 'Resolved' && !report.resolvedAt);
+  const formattedClosedAt = updates.closedAt
+    ? new Date(updates.closedAt).toISOString().slice(0, 19).replace('T', ' ')
+    : updates.closedAt === null
+    ? null
+    : (updates.reportStatus === 'Closed' && !report.closedAt ? (report.createdAt ? new Date(new Date(report.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ') : now) : null);
+  const shouldUpdateClosedAt = updates.closedAt !== undefined || (updates.reportStatus === 'Closed' && !report.closedAt);
 
   await pool.query<ResultSetHeader>(
     `UPDATE reports 
@@ -776,7 +802,9 @@ export async function testEditReport(
          reportStatus = COALESCE(?, reportStatus),
          createdAt = COALESCE(?, createdAt),
          photoCapturedAt = COALESCE(?, photoCapturedAt),
+         verifiedAt = CASE WHEN ? = 1 THEN ? ELSE verifiedAt END,
          resolvedAt = CASE WHEN ? = 1 THEN ? ELSE resolvedAt END,
+         closedAt = CASE WHEN ? = 1 THEN ? ELSE closedAt END,
          updatedAt = ?
      WHERE id = ?`,
     [
@@ -805,8 +833,12 @@ export async function testEditReport(
       updates.reportStatus ?? null,
       formattedCreatedAt,
       formattedCapturedAt,
+      shouldUpdateVerifiedAt ? 1 : 0,
+      formattedVerifiedAt,
       shouldUpdateResolvedAt ? 1 : 0,
       formattedResolvedAt,
+      shouldUpdateClosedAt ? 1 : 0,
+      formattedClosedAt,
       now,
       reportId,
     ]

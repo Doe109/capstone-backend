@@ -75,7 +75,9 @@ export interface RoadReport {
   reportReliabilityScore: number;
 
   advisoryText: string | null;
+  verifiedAt?: string | null;
   resolvedAt: string | null;
+  closedAt?: string | null;
   resolutionPhotoUri?: string | null;
   resolvedByCitizenId?: string | null;
   userVote?: VoteType | null;
