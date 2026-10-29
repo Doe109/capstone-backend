@@ -69,6 +69,7 @@ export interface RoadReport {
   previousResolutionAttemptAt?: string | null;
   resolutionHistory?: ResolutionAttempt[];
   userRepairVote?: VoteType | null;
+  repairPhotoDistanceMeters?: number | null;
 
   // Backend-specific DSS scores
   locationValidationScore: number;

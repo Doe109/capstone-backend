@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS reports (
   closedAt DATETIME,
   resolutionPhotoUri VARCHAR(500) NULL,
   resolvedByCitizenId VARCHAR(36) NULL,
+  repairPhotoDistanceMeters DOUBLE NULL DEFAULT NULL,
   FOREIGN KEY (citizenId) REFERENCES users(id),
   INDEX idx_status (reportStatus),
   INDEX idx_barangay (selectedBarangay),

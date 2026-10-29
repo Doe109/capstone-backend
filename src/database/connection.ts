@@ -244,6 +244,20 @@ export async function ensureSchemaUpToDate(): Promise<void> {
       console.warn('Notice adding closedAt column:', closedColErr);
     }
 
+    // 15. Add repairPhotoDistanceMeters column to reports if missing
+    try {
+      const [distCols] = (await db.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'reports' AND COLUMN_NAME = 'repairPhotoDistanceMeters'`,
+        [dbName]
+      )) as any;
+      if (distCols.length === 0) {
+        await db.query(`ALTER TABLE reports ADD COLUMN repairPhotoDistanceMeters DOUBLE NULL DEFAULT NULL`);
+        console.log('✅ Added missing repairPhotoDistanceMeters column to reports table');
+      }
+    } catch (distColErr) {
+      console.warn('Notice adding repairPhotoDistanceMeters column:', distColErr);
+    }
+
     // 9. Ensure research and demo test accounts exist
     try {
       const bcrypt = require('bcrypt');

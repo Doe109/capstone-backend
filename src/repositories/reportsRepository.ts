@@ -86,6 +86,7 @@ function rowToReport(row: RowDataPacket): RoadReport {
     previousRepairAgreeCount: Number(row.previousRepairAgreeCount ?? 0),
     previousRepairDisagreeCount: Number(row.previousRepairDisagreeCount ?? 0),
     previousResolutionAttemptAt: row.previousResolutionAttemptAt ? formatIsoTimestamp(row.previousResolutionAttemptAt) : null,
+    repairPhotoDistanceMeters: row.repairPhotoDistanceMeters !== null && row.repairPhotoDistanceMeters !== undefined ? Number(row.repairPhotoDistanceMeters) : null,
     resolutionHistory: (() => {
       try {
         if (row.resolutionHistory) {
@@ -711,6 +712,7 @@ export async function testEditReport(
     previousRepairDisagreeCount?: number;
     previousResolutionAttemptAt?: string | null;
     resolutionHistory?: any[];
+    repairPhotoDistanceMeters?: number | null;
   }
 ): Promise<RoadReport | null> {
   const pool = getPool();
@@ -799,6 +801,7 @@ export async function testEditReport(
          previousRepairDisagreeCount = COALESCE(?, previousRepairDisagreeCount),
          previousResolutionAttemptAt = CASE WHEN ? = 1 THEN ? ELSE previousResolutionAttemptAt END,
          resolutionHistory = CASE WHEN ? = 1 THEN ? ELSE resolutionHistory END,
+         repairPhotoDistanceMeters = CASE WHEN ? = 1 THEN ? ELSE repairPhotoDistanceMeters END,
          reportStatus = COALESCE(?, reportStatus),
          createdAt = COALESCE(?, createdAt),
          photoCapturedAt = COALESCE(?, photoCapturedAt),
@@ -830,6 +833,8 @@ export async function testEditReport(
       updates.previousResolutionAttemptAt ? new Date(updates.previousResolutionAttemptAt).toISOString().slice(0, 19).replace('T', ' ') : null,
       updates.resolutionHistory !== undefined ? 1 : 0,
       updates.resolutionHistory ? JSON.stringify(updates.resolutionHistory) : null,
+      updates.repairPhotoDistanceMeters !== undefined ? 1 : 0,
+      updates.repairPhotoDistanceMeters !== undefined ? updates.repairPhotoDistanceMeters : null,
       updates.reportStatus ?? null,
       formattedCreatedAt,
       formattedCapturedAt,
